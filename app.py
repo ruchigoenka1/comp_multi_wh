@@ -5,81 +5,69 @@ import math
 import pandas as pd
 
 # --- Core Calculation Functions ---
-def calculate_metrics(demand, std_dev, lead_time, service_level, unit_cost, order_qty):
-    """Calculates ROP, Safety Stock, and Working Capital metrics."""
+def get_recommendations(demand, std_dev, lead_time, service_level):
+    """Calculates the mathematically recommended ROP and Safety Stock."""
     if lead_time <= 0:
-        return 0, 0, 0, 0
-        
+        return 0, 0
     z_score = norm.ppf(service_level)
     safety_stock = max(0, z_score * std_dev * math.sqrt(lead_time))
     rop = max(0, (demand * lead_time) + safety_stock)
-    
-    avg_inventory = (order_qty / 2) + safety_stock
-    max_inventory = order_qty + safety_stock
-    
-    avg_working_capital = avg_inventory * unit_cost
-    max_working_capital = max_inventory * unit_cost
-    
-    return rop, safety_stock, avg_working_capital, max_working_capital
+    return rop, safety_stock
+
+def get_financials(actual_rop, demand, lead_time, order_qty, unit_cost):
+    """Calculates working capital based on the USER'S chosen ROP."""
+    # Realized safety stock is whatever buffer remains after lead time demand
+    actual_ss = max(0, actual_rop - (demand * lead_time))
+    avg_working_capital = ((order_qty / 2) + actual_ss) * unit_cost
+    max_working_capital = (order_qty + actual_ss) * unit_cost
+    return actual_ss, avg_working_capital, max_working_capital
 
 def simulate_inventory_cycle(demand, rop, ss, q, lead_time, days=90, warmup_days=150):
     """Simulates daily inventory, skipping a warmup period to show stabilized data."""
-    # Start closer to a normal state to reduce extreme warmup times
     inventory = rop + (q / 2) 
     pipeline = []
     
-    # 1. WARM-UP PHASE: Run invisibly to fill the pipeline and stabilize the supply chain
+    # 1. WARM-UP PHASE
     for _ in range(warmup_days):
         inventory -= demand
-        
-        # Process arriving orders
         for order in pipeline:
             order['arrival_in'] -= 1
             if order['arrival_in'] <= 0:
                 inventory += order['qty']
         pipeline = [o for o in pipeline if o['arrival_in'] > 0]
         
-        # Check if we need to reorder based on Inventory Position
         inv_position = inventory + sum(o['qty'] for o in pipeline)
         if inv_position <= rop:
             pipeline.append({'qty': q, 'arrival_in': lead_time})
             
-    # 2. RECORDING PHASE: The actual 90 days we plot on the chart
+    # 2. RECORDING PHASE
     inv_history = []
     for _ in range(days):
-        # We use max(0, inventory) for the chart to represent physical items on a shelf. 
-        # (If it drops below 0 in the background, it acts as a backorder).
         inv_history.append(max(0, inventory)) 
-        
         inventory -= demand
         
-        # Process arriving orders
         for order in pipeline:
             order['arrival_in'] -= 1
             if order['arrival_in'] <= 0:
                 inventory += order['qty']
         pipeline = [o for o in pipeline if o['arrival_in'] > 0]
         
-        # Check reorder
         inv_position = inventory + sum(o['qty'] for o in pipeline)
         if inv_position <= rop:
             pipeline.append({'qty': q, 'arrival_in': lead_time})
             
-    # Create DataFrame for Streamlit charting
     df = pd.DataFrame({
         'Day': range(days),
         'On-Hand Inventory': inv_history,
-        'Reorder Point (ROP)': [rop] * days,
-        'Safety Stock (SS)': [ss] * days
+        'Actual Reorder Point (ROP)': [rop] * days,
+        'Realized Safety Stock (SS)': [ss] * days
     })
     return df.set_index('Day')
 
 # --- App Configuration ---
 st.set_page_config(page_title="Supply Chain Multi-Scenario Optimizer", layout="wide")
-st.title("📦 Supply Chain Financial & Inventory Metrics Dashboard")
-st.markdown("Evaluate working capital efficiency and visualize stabilized inventory levels across single and two-stage warehouse structures.")
+st.title("📦 Supply Chain Financial & Inventory Metrics")
 
-# --- Layout Columns ---
 col1, col2 = st.columns(2)
 
 # ==========================================
@@ -98,19 +86,23 @@ with col1:
     s1_cost = st.number_input("Unit Cost ($/unit)", min_value=0.01, value=50.0, step=5.0, key="s1_cost")
     s1_q = st.number_input("Order Quantity (Q)", min_value=1, value=500, step=50, key="s1_q")
     
-    s1_rop, s1_ss, s1_avg_wc, s1_max_wc = calculate_metrics(s1_demand, s1_std_dev, s1_lead_time, s1_service_level, s1_cost, s1_q)
+    # ROP DECISION BLOCK
+    st.markdown("### 🎯 Set Reorder Point")
+    rec_s1_rop, rec_s1_ss = get_recommendations(s1_demand, s1_std_dev, s1_lead_time, s1_service_level)
+    st.caption(f"💡 *Mathematically Recommended ROP: {rec_s1_rop:,.0f} units*")
     
-    st.markdown("### 🎯 Scenario 1 Metrics")
-    st.info(f"**Recommended Reorder Point (ROP):** {s1_rop:,.0f} units *(Safety Stock: {s1_ss:,.0f} units)*")
+    # THE RESTORED INPUT BOX
+    s1_actual_rop = st.number_input("Actual ROP (Scenario 1)", min_value=0, value=int(rec_s1_rop), step=10, key="s1_actual_rop")
+    s1_actual_ss, s1_avg_wc, s1_max_wc = get_financials(s1_actual_rop, s1_demand, s1_lead_time, s1_q, s1_cost)
     
+    st.markdown("#### Scenario 1 Matrices")
     m1, m2, m3 = st.columns(3)
     m1.metric("Avg Working Capital", f"${s1_avg_wc:,.2f}")
     m2.metric("Max Working Capital", f"${s1_max_wc:,.2f}")
-    m3.metric("Target Fill Rate", f"{s1_service_level*100:.1f}%")
+    m3.metric("Realized Safety Stock", f"{s1_actual_ss:,.0f} units")
     
-    # Stabilized Chart
     st.markdown("#### 📈 90-Day Inventory Projection")
-    df_s1 = simulate_inventory_cycle(s1_demand, s1_rop, s1_ss, s1_q, s1_lead_time)
+    df_s1 = simulate_inventory_cycle(s1_demand, s1_actual_rop, s1_actual_ss, s1_q, s1_lead_time)
     st.line_chart(df_s1, color=["#1f77b4", "#ff7f0e", "#d62728"])
 
 # ==========================================
@@ -132,12 +124,14 @@ with col2:
     s2_sec_sl = st.slider("Secondary Fill Rate", min_value=0.50, max_value=0.999, value=0.95, step=0.01, key="s2_sec_sl", format="%.2f")
     s2_sec_q = st.number_input("Secondary Order Qty", min_value=1, value=300, step=50, key="s2_sec_q")
     
-    s2_sec_rop, s2_sec_ss, s2_sec_avg_wc, s2_sec_max_wc = calculate_metrics(s2_sec_demand, s2_sec_std, s2_sec_lt, s2_sec_sl, s2_cost, s2_sec_q)
+    rec_sec_rop, rec_sec_ss = get_recommendations(s2_sec_demand, s2_sec_std, s2_sec_lt, s2_sec_sl)
+    st.caption(f"💡 *Mathematically Recommended ROP: {rec_sec_rop:,.0f} units*")
+    s2_sec_actual_rop = st.number_input("Actual Secondary ROP", min_value=0, value=int(rec_sec_rop), step=10, key="s2_sec_actual_rop")
     
-    # Secondary Stabilized Chart
+    s2_sec_actual_ss, s2_sec_avg_wc, s2_sec_max_wc = get_financials(s2_sec_actual_rop, s2_sec_demand, s2_sec_lt, s2_sec_q, s2_cost)
+    
     with st.expander("📊 View Secondary Warehouse Projection"):
-        st.caption(f"**ROP:** {s2_sec_rop:,.0f} | **SS:** {s2_sec_ss:,.0f}")
-        df_s2_sec = simulate_inventory_cycle(s2_sec_demand, s2_sec_rop, s2_sec_ss, s2_sec_q, s2_sec_lt)
+        df_s2_sec = simulate_inventory_cycle(s2_sec_demand, s2_sec_actual_rop, s2_sec_actual_ss, s2_sec_q, s2_sec_lt)
         st.line_chart(df_s2_sec, color=["#1f77b4", "#ff7f0e", "#d62728"])
         
     st.markdown("---")
@@ -150,26 +144,28 @@ with col2:
     s2_main_sl = st.slider("Main Target Fill Rate", min_value=0.50, max_value=0.999, value=0.98, step=0.01, key="s2_main_sl", format="%.2f")
     s2_main_q = st.number_input("Main Order Qty", min_value=1, value=800, step=50, key="s2_main_q")
     
-    s2_main_rop, s2_main_ss, s2_main_avg_wc, s2_main_max_wc = calculate_metrics(s2_main_demand, s2_main_std, s2_main_lt, s2_main_sl, s2_cost, s2_main_q)
+    rec_main_rop, rec_main_ss = get_recommendations(s2_main_demand, s2_main_std, s2_main_lt, s2_main_sl)
+    st.caption(f"💡 *Mathematically Recommended ROP: {rec_main_rop:,.0f} units*")
+    s2_main_actual_rop = st.number_input("Actual Main ROP", min_value=0, value=int(rec_main_rop), step=10, key="s2_main_actual_rop")
+    
+    s2_main_actual_ss, s2_main_avg_wc, s2_main_max_wc = get_financials(s2_main_actual_rop, s2_main_demand, s2_main_lt, s2_main_q, s2_cost)
 
-    # Main Stabilized Chart
     with st.expander("📊 View Main Warehouse Projection"):
-        st.caption(f"**ROP:** {s2_main_rop:,.0f} | **SS:** {s2_main_ss:,.0f}")
-        df_s2_main = simulate_inventory_cycle(s2_main_demand, s2_main_rop, s2_main_ss, s2_main_q, s2_main_lt)
+        df_s2_main = simulate_inventory_cycle(s2_main_demand, s2_main_actual_rop, s2_main_actual_ss, s2_main_q, s2_main_lt)
         st.line_chart(df_s2_main, color=["#1f77b4", "#ff7f0e", "#d62728"])
 
     # --- Combined Metrics ---
-    st.markdown("### 🎯 Scenario 2 Key Metrics Matrix")
+    st.markdown("### 🎯 Scenario 2 Matrices")
     
-    st.markdown("**Individual Warehouse Performance Breakdown:**")
+    st.markdown("**Individual Breakdown:**")
     st.table({
-        "Metric": ["Avg Working Capital", "Max Working Capital", "Fill Rate", "Safety Stock Level"],
-        "Secondary Warehouse": [f"${s2_sec_avg_wc:,.2f}", f"${s2_sec_max_wc:,.2f}", f"{s2_sec_sl*100:.1f}%", f"{s2_sec_ss:,.0f} units"],
-        "Main Warehouse": [f"${s2_main_avg_wc:,.2f}", f"${s2_main_max_wc:,.2f}", f"{s2_main_sl*100:.1f}%", f"{s2_main_ss:,.0f} units"]
+        "Metric": ["Avg Working Capital", "Max Working Capital", "Fill Rate Goal", "Realized Safety Stock"],
+        "Secondary Warehouse": [f"${s2_sec_avg_wc:,.2f}", f"${s2_sec_max_wc:,.2f}", f"{s2_sec_sl*100:.1f}%", f"{s2_sec_actual_ss:,.0f} units"],
+        "Main Warehouse": [f"${s2_main_avg_wc:,.2f}", f"${s2_main_max_wc:,.2f}", f"{s2_main_sl*100:.1f}%", f"{s2_main_actual_ss:,.0f} units"]
     })
     
     st.markdown("**Combined System Totals:**")
     sm1, sm2, sm3 = st.columns(3)
-    sm1.metric("Total System Avg WC", f"${(s2_sec_avg_wc + s2_main_avg_wc):,.2f}")
-    sm2.metric("Total System Max WC", f"${(s2_sec_max_wc + s2_main_max_wc):,.2f}")
-    sm3.metric("Effective Fill Rate", f"{(s2_sec_sl * s2_main_sl)*100:.1f}%", help="Main Fill Rate × Secondary Fill Rate")
+    sm1.metric("Total Avg WC", f"${(s2_sec_avg_wc + s2_main_avg_wc):,.2f}")
+    sm2.metric("Total Max WC", f"${(s2_sec_max_wc + s2_main_max_wc):,.2f}")
+    sm3.metric("Effective Fill Rate", f"{(s2_sec_sl * s2_main_sl)*100:.1f}%")
