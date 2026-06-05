@@ -121,4 +121,33 @@ with col2:
     st.markdown("---")
     
     # --- Main Warehouse ---
-    st.
+    st.subheader("2. Main Warehouse (Hub)")
+    s2_main_demand = st.number_input("Aggregated Daily Demand", min_value=0.0, value=100.0, step=10.0, key="s2_main_d")
+    s2_main_std = st.number_input("Aggregated Std Dev", min_value=0.0, value=25.0, step=5.0, key="s2_main_std")
+    s2_main_lt = st.number_input("Lead Time from Supplier", min_value=0.0, value=10.0, step=1.0, key="s2_main_lt")
+    s2_main_sl = st.slider("Main Target Fill Rate", min_value=0.50, max_value=0.999, value=0.98, step=0.01, key="s2_main_sl", format="%.2f")
+    s2_main_q = st.number_input("Main Order Qty", min_value=1, value=800, step=50, key="s2_main_q")
+    
+    s2_main_rop, s2_main_ss, s2_main_avg_wc, s2_main_max_wc = calculate_metrics(s2_main_demand, s2_main_std, s2_main_lt, s2_main_sl, s2_cost, s2_main_q)
+
+    # Main Chart
+    with st.expander("📊 View Main Warehouse Projection"):
+        st.caption(f"**ROP:** {s2_main_rop:,.0f} | **SS:** {s2_main_ss:,.0f}")
+        df_s2_main = simulate_inventory_cycle(s2_main_demand, s2_main_rop, s2_main_ss, s2_main_q, s2_main_lt)
+        st.line_chart(df_s2_main, color=["#1f77b4", "#ff7f0e", "#d62728"])
+
+    # --- Combined Metrics ---
+    st.markdown("### 🎯 Scenario 2 Key Metrics Matrix")
+    
+    st.markdown("**Individual Warehouse Performance Breakdown:**")
+    st.table({
+        "Metric": ["Avg Working Capital", "Max Working Capital", "Fill Rate", "Safety Stock Level"],
+        "Secondary Warehouse": [f"${s2_sec_avg_wc:,.2f}", f"${s2_sec_max_wc:,.2f}", f"{s2_sec_sl*100:.1f}%", f"{s2_sec_ss:,.0f} units"],
+        "Main Warehouse": [f"${s2_main_avg_wc:,.2f}", f"${s2_main_max_wc:,.2f}", f"{s2_main_sl*100:.1f}%", f"{s2_main_ss:,.0f} units"]
+    })
+    
+    st.markdown("**Combined System Totals:**")
+    sm1, sm2, sm3 = st.columns(3)
+    sm1.metric("Total System Avg WC", f"${(s2_sec_avg_wc + s2_main_avg_wc):,.2f}")
+    sm2.metric("Total System Max WC", f"${(s2_sec_max_wc + s2_main_max_wc):,.2f}")
+    sm3.metric("Effective Fill Rate", f"{(s2_sec_sl * s2_main_sl)*100:.1f}%", help="Main Fill Rate × Secondary Fill Rate")
