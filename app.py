@@ -6,6 +6,7 @@ import pandas as pd
 
 # --- Core Calculation Functions ---
 def calculate_metrics(demand, std_dev, lead_time, service_level, unit_cost, order_qty):
+    """Calculates ROP, Safety Stock, and Working Capital metrics."""
     if lead_time <= 0:
         return 0, 0, 0, 0
         
@@ -21,15 +22,15 @@ def calculate_metrics(demand, std_dev, lead_time, service_level, unit_cost, orde
     
     return rop, safety_stock, avg_working_capital, max_working_capital
 
-def simulate_inventory_cycle(demand, rop, ss, q, lead_time, days=90):
-    """Simulates daily inventory levels to create a sawtooth chart."""
-    inventory = q + ss  # Start with a full warehouse
-    inv_history = []
-    pipeline = [] # Tracks orders placed but not yet arrived
+def simulate_inventory_cycle(demand, rop, ss, q, lead_time, days=90, warmup_days=150):
+    """Simulates daily inventory, skipping a warmup period to show stabilized data."""
+    # Start closer to a normal state to reduce extreme warmup times
+    inventory = rop + (q / 2) 
+    pipeline = []
     
-    for day in range(days):
-        inv_history.append(inventory)
-        inventory -= demand # Fulfill daily demand
+    # 1. WARM-UP PHASE: Run invisibly to fill the pipeline and stabilize the supply chain
+    for _ in range(warmup_days):
+        inventory -= demand
         
         # Process arriving orders
         for order in pipeline:
@@ -38,7 +39,28 @@ def simulate_inventory_cycle(demand, rop, ss, q, lead_time, days=90):
                 inventory += order['qty']
         pipeline = [o for o in pipeline if o['arrival_in'] > 0]
         
-        # Check if we need to reorder (based on Inventory Position)
+        # Check if we need to reorder based on Inventory Position
+        inv_position = inventory + sum(o['qty'] for o in pipeline)
+        if inv_position <= rop:
+            pipeline.append({'qty': q, 'arrival_in': lead_time})
+            
+    # 2. RECORDING PHASE: The actual 90 days we plot on the chart
+    inv_history = []
+    for _ in range(days):
+        # We use max(0, inventory) for the chart to represent physical items on a shelf. 
+        # (If it drops below 0 in the background, it acts as a backorder).
+        inv_history.append(max(0, inventory)) 
+        
+        inventory -= demand
+        
+        # Process arriving orders
+        for order in pipeline:
+            order['arrival_in'] -= 1
+            if order['arrival_in'] <= 0:
+                inventory += order['qty']
+        pipeline = [o for o in pipeline if o['arrival_in'] > 0]
+        
+        # Check reorder
         inv_position = inventory + sum(o['qty'] for o in pipeline)
         if inv_position <= rop:
             pipeline.append({'qty': q, 'arrival_in': lead_time})
@@ -55,7 +77,7 @@ def simulate_inventory_cycle(demand, rop, ss, q, lead_time, days=90):
 # --- App Configuration ---
 st.set_page_config(page_title="Supply Chain Multi-Scenario Optimizer", layout="wide")
 st.title("📦 Supply Chain Financial & Inventory Metrics Dashboard")
-st.markdown("Evaluate working capital efficiency and visualize inventory levels across single and two-stage warehouse structures.")
+st.markdown("Evaluate working capital efficiency and visualize stabilized inventory levels across single and two-stage warehouse structures.")
 
 # --- Layout Columns ---
 col1, col2 = st.columns(2)
@@ -86,10 +108,10 @@ with col1:
     m2.metric("Max Working Capital", f"${s1_max_wc:,.2f}")
     m3.metric("Target Fill Rate", f"{s1_service_level*100:.1f}%")
     
-    # Chart
+    # Stabilized Chart
     st.markdown("#### 📈 90-Day Inventory Projection")
     df_s1 = simulate_inventory_cycle(s1_demand, s1_rop, s1_ss, s1_q, s1_lead_time)
-    st.line_chart(df_s1, color=["#1f77b4", "#ff7f0e", "#d62728"]) # Blue Inventory, Orange ROP, Red SS
+    st.line_chart(df_s1, color=["#1f77b4", "#ff7f0e", "#d62728"])
 
 # ==========================================
 # SCENARIO 2: TWO-STAGE WAREHOUSE
@@ -112,7 +134,7 @@ with col2:
     
     s2_sec_rop, s2_sec_ss, s2_sec_avg_wc, s2_sec_max_wc = calculate_metrics(s2_sec_demand, s2_sec_std, s2_sec_lt, s2_sec_sl, s2_cost, s2_sec_q)
     
-    # Secondary Chart
+    # Secondary Stabilized Chart
     with st.expander("📊 View Secondary Warehouse Projection"):
         st.caption(f"**ROP:** {s2_sec_rop:,.0f} | **SS:** {s2_sec_ss:,.0f}")
         df_s2_sec = simulate_inventory_cycle(s2_sec_demand, s2_sec_rop, s2_sec_ss, s2_sec_q, s2_sec_lt)
@@ -130,7 +152,7 @@ with col2:
     
     s2_main_rop, s2_main_ss, s2_main_avg_wc, s2_main_max_wc = calculate_metrics(s2_main_demand, s2_main_std, s2_main_lt, s2_main_sl, s2_cost, s2_main_q)
 
-    # Main Chart
+    # Main Stabilized Chart
     with st.expander("📊 View Main Warehouse Projection"):
         st.caption(f"**ROP:** {s2_main_rop:,.0f} | **SS:** {s2_main_ss:,.0f}")
         df_s2_main = simulate_inventory_cycle(s2_main_demand, s2_main_rop, s2_main_ss, s2_main_q, s2_main_lt)
