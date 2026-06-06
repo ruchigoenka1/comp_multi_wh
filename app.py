@@ -3,10 +3,11 @@ import numpy as np
 from scipy.stats import norm
 import math
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 
 # --- Core Financial Calculations ---
 def get_recommendations(demand, std_dev, lead_time, service_level):
+    """Calculates the mathematically recommended ROP and Safety Stock."""
     if lead_time <= 0: return 0, 0
     z_score = norm.ppf(service_level)
     safety_stock = max(0, z_score * std_dev * math.sqrt(lead_time))
@@ -14,6 +15,7 @@ def get_recommendations(demand, std_dev, lead_time, service_level):
     return rop, safety_stock
 
 def get_financials(actual_rop, demand, lead_time, order_qty, unit_cost):
+    """Calculates working capital based on the USER'S chosen ROP."""
     actual_ss = max(0, actual_rop - (demand * lead_time))
     avg_working_capital = ((order_qty / 2) + actual_ss) * unit_cost
     max_working_capital = (order_qty + actual_ss) * unit_cost
@@ -114,14 +116,34 @@ def simulate_two_stage(sec_demand, sec_rop, sec_q, sec_lt, main_rop, main_q, mai
 
 # --- Plotly Helper Function ---
 def render_interactive_chart(df, y_cols, colors):
-    fig = px.line(df, x='Day', y=y_cols, color_discrete_sequence=colors)
+    """Renders a Plotly chart with interactive legends and step-lines for pipelines."""
+    fig = go.Figure()
+    
+    for i, col in enumerate(y_cols):
+        is_pipeline = 'Pipeline' in col
+        
+        fig.add_trace(go.Scatter(
+            x=df['Day'], 
+            y=df[col], 
+            mode='lines', 
+            name=col, 
+            line=dict(color=colors[i], width=2 if not is_pipeline else 3),
+            line_shape='hv' if is_pipeline else 'linear', # 'hv' creates the step effect
+            opacity=0.8 if is_pipeline else 1.0
+        ))
+        
     fig.update_layout(
         xaxis_title="Day",
         yaxis_title="Units",
         legend_title="Metrics (Click to Hide/Show)",
         hovermode="x unified",
-        margin=dict(l=0, r=0, t=30, b=0)
+        margin=dict(l=0, r=0, t=30, b=0),
+        plot_bgcolor='rgba(0,0,0,0)'
     )
+    
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGrey')
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightGrey')
+    
     st.plotly_chart(fig, use_container_width=True)
 
 # --- App Configuration ---
@@ -132,6 +154,7 @@ st.title("📦 Supply Chain Scenario Architect")
 # GLOBAL SETTINGS
 # ==========================================
 st.markdown("### ⚙️ Global Simulation Settings")
+st.markdown("Adjust these sliders to define the simulation horizon. The **Warm-up Period** runs invisibly to stabilize the supply chain.")
 col_g1, col_g2 = st.columns(2)
 warmup_days = col_g1.number_input("Warm-up Period (Days hidden to stabilize)", min_value=0, value=150, step=30)
 sim_days = col_g2.number_input("Display Period (Days plotted)", min_value=10, value=90, step=30)
@@ -165,7 +188,12 @@ with tab1:
     m2.metric("Realized Safety Stock", f"{s1_act_ss:,.0f} units")
     
     df_s1 = simulate_single_stage(s1_demand, s1_actual_rop, s1_act_ss, s1_q, s1_lead_time, sim_days, warmup_days)
+    
+    st.markdown(f"#### 📈 {sim_days}-Day Simulation")
     render_interactive_chart(df_s1, ['On-Hand Inventory', 'Pipeline Inventory', 'ROP Limit'], ["#1f77b4", "#9467bd", "#ff7f0e"])
+    
+    with st.expander("📋 View Daily Data Table"):
+        st.dataframe(df_s1, use_container_width=True)
 
 # --- TAB 2: TWO-STAGE (LOCAL ROP) ---
 with tab2:
@@ -208,7 +236,11 @@ with tab2:
     sm2.metric("Effective Fill Rate", f"{(s2_sec_sl * s2_main_sl)*100:.1f}%")
     sm3.metric("Main Delay Stockouts", f"{df_s2['Stockout_Blamed_On_Main'].sum()} Days")
 
+    st.markdown(f"#### 📈 {sim_days}-Day Simulation")
     render_interactive_chart(df_s2, ['Sec On-Hand', 'Sec Pipeline', 'Main On-Hand', 'Main Pipeline'], ["#1f77b4", "#aec7e8", "#2ca02c", "#98df8a"])
+    
+    with st.expander("📋 View Daily Data Table"):
+        st.dataframe(df_s2, use_container_width=True)
 
 # --- TAB 3: ECHELON SYSTEM ---
 with tab3:
@@ -255,7 +287,11 @@ with tab3:
     tm2.metric("Effective Fill Rate", f"{(s3_sec_sl * s3_main_sl)*100:.1f}%")
     tm3.metric("Main Delay Stockouts", f"{df_s3['Stockout_Blamed_On_Main'].sum()} Days")
 
+    st.markdown(f"#### 📈 {sim_days}-Day Simulation")
     render_interactive_chart(df_s3, ['Sec On-Hand', 'Sec Pipeline', 'Main On-Hand', 'Main Pipeline'], ["#1f77b4", "#aec7e8", "#2ca02c", "#98df8a"])
+    
+    with st.expander("📋 View Daily Data Table"):
+        st.dataframe(df_s3, use_container_width=True)
 
 # ==========================================
 # MASTER COMPARISON TABLE
@@ -263,7 +299,6 @@ with tab3:
 st.markdown("---")
 st.header("📋 Master Comparison Summary")
 
-# Compiling the Master Table Data
 comparison_data = {
     "Metric": ["Target Fill Rate", "Order Quantity (Q)", "Recommended ROP", "Actual Set ROP", "Avg Working Capital", "Stockout Days (Due to Main)"],
     "S1: Central": [f"{s1_service_level*100:.1f}%", f"{s1_q:,.0f}", f"{rec_s1_rop:,.0f}", f"{s1_actual_rop:,.0f}", f"${s1_avg_wc:,.0f}", "N/A"],
