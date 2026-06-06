@@ -19,7 +19,7 @@ def get_financials(actual_rop, demand, lead_time, order_qty, unit_cost):
     return actual_ss, avg_working_capital, max_working_capital
 
 # --- Scenario 1: Single Warehouse Simulation ---
-def simulate_single_stage(demand, rop, ss, q, lead_time, days=90, warmup=150):
+def simulate_single_stage(demand, rop, ss, q, lead_time, days, warmup):
     inventory = rop + (q / 2) 
     pipeline = []
     history = []
@@ -49,7 +49,7 @@ def simulate_single_stage(demand, rop, ss, q, lead_time, days=90, warmup=150):
     return pd.DataFrame(history)
 
 # --- Scenario 2: Linked Two-Stage Simulation ---
-def simulate_two_stage(sec_demand, sec_rop, sec_q, sec_lt, main_rop, main_q, main_lt, days=90, warmup=150):
+def simulate_two_stage(sec_demand, sec_rop, sec_q, sec_lt, main_rop, main_q, main_lt, days, warmup):
     main_inv = main_rop + main_q
     sec_inv = sec_rop + sec_q
 
@@ -121,6 +121,17 @@ st.title("📦 Supply Chain Financial & Inventory Metrics")
 st.markdown("Use the collapsible panels below to configure and run simulations for different warehouse structures.")
 
 # ==========================================
+# GLOBAL SETTINGS
+# ==========================================
+st.markdown("### ⚙️ Global Simulation Settings")
+st.markdown("Adjust these sliders to define the simulation horizon. The **Warm-up Period** runs invisibly to stabilize the supply chain before the **Display Period** begins recording data for the charts.")
+
+col_g1, col_g2 = st.columns(2)
+warmup_days = col_g1.number_input("Warm-up Period (Days hidden to stabilize)", min_value=0, value=150, step=30, help="Days to run the simulation before capturing data, avoiding the 'cold start' effect.")
+sim_days = col_g2.number_input("Display Period (Days shown on graph)", min_value=10, value=90, step=30, help="The total number of days plotted on the charts and captured in the data tables.")
+st.markdown("---")
+
+# ==========================================
 # SCENARIO 1: SINGLE WAREHOUSE
 # ==========================================
 with st.expander("🏢 Scenario 1: Single Central Warehouse", expanded=True):
@@ -147,10 +158,9 @@ with st.expander("🏢 Scenario 1: Single Central Warehouse", expanded=True):
     m1.metric("Avg Working Capital", f"${s1_avg_wc:,.2f}")
     m2.metric("Realized Safety Stock", f"{s1_act_ss:,.0f} units")
     
-    df_s1 = simulate_single_stage(s1_demand, s1_actual_rop, s1_act_ss, s1_q, s1_lead_time)
+    df_s1 = simulate_single_stage(s1_demand, s1_actual_rop, s1_act_ss, s1_q, s1_lead_time, sim_days, warmup_days)
     
-    st.markdown("#### 📈 90-Day Simulation (Inventory vs Pipeline)")
-    # Added Pipeline Inventory to the chart with a distinct purple color
+    st.markdown(f"#### 📈 {sim_days}-Day Simulation (Inventory vs Pipeline)")
     st.line_chart(df_s1.set_index('Day')[['On-Hand Inventory', 'Pipeline Inventory', 'ROP']], color=["#1f77b4", "#9467bd", "#ff7f0e"], height=350)
     
     with st.expander("📋 View Daily Data Table for Scenario 1"):
@@ -200,7 +210,7 @@ with st.expander("🏬 Scenario 2: Linked Two-Stage System", expanded=False):
     st.markdown("### 🎯 Scenario 2 Metrics & Simulation")
     
     df_s2 = simulate_two_stage(s2_sec_demand, s2_sec_actual_rop, s2_sec_q, s2_sec_lt,
-                               s2_main_actual_rop, s2_main_q, s2_main_lt)
+                               s2_main_actual_rop, s2_main_q, s2_main_lt, sim_days, warmup_days)
     
     main_blame_days = df_s2['Stockout_Blamed_On_Main'].sum()
 
@@ -209,8 +219,7 @@ with st.expander("🏬 Scenario 2: Linked Two-Stage System", expanded=False):
     sm2.metric("Effective System Fill Rate", f"{(s2_sec_sl * s2_main_sl)*100:.1f}%")
     sm3.metric("Stockouts Caused by Main Whse Delay", f"{main_blame_days} Days")
 
-    st.markdown("#### 📈 90-Day System Simulation (Inventory vs Pipeline)")
-    # Grouped On-Hand vs Pipeline. Dark Blue/Green for On-Hand, Light Blue/Green for Pipeline
+    st.markdown(f"#### 📈 {sim_days}-Day System Simulation (Inventory vs Pipeline)")
     st.line_chart(df_s2.set_index('Day')[['Sec_On_Hand', 'Sec_Pipeline', 'Main_On_Hand', 'Main_Pipeline']], 
                   color=["#1f77b4", "#aec7e8", "#2ca02c", "#98df8a"], height=350)
     
