@@ -138,11 +138,12 @@ def render_interactive_chart(df, y_cols, colors):
         legend_title="Metrics (Click to Hide/Show)",
         hovermode="x unified",
         margin=dict(l=0, r=0, t=30, b=0),
-        plot_bgcolor='rgba(0,0,0,0)'
+        plot_bgcolor='rgba(0,0,0,0)' # Makes the chart background clean
     )
     
-    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGrey')
-    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightGrey')
+    # Grid lines disabled for clean interpretation
+    fig.update_yaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
+    fig.update_xaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
     
     st.plotly_chart(fig, use_container_width=True)
 
@@ -179,7 +180,10 @@ with tab1:
     s1_q = col1f.number_input("Order Qty (Q)", min_value=1, value=500, step=50, key="s1_q")
     
     rec_s1_rop, rec_s1_ss = get_recommendations(s1_demand, s1_std_dev, s1_lead_time, s1_service_level)
-    s1_actual_rop = col1g.number_input("Actual ROP", min_value=0, value=int(rec_s1_rop), step=10, key="s1_act", help=f"Rec: {rec_s1_rop:.0f}")
+    
+    # Input with suggested ROP below
+    s1_actual_rop = col1g.number_input("Actual ROP", min_value=0, value=int(rec_s1_rop), step=10, key="s1_act")
+    col1g.caption(f"💡 Suggested: **{rec_s1_rop:,.0f}**")
     
     st.markdown("---")
     s1_act_ss, s1_avg_wc, s1_max_wc = get_financials(s1_actual_rop, s1_demand, s1_lead_time, s1_q, s1_cost)
@@ -212,7 +216,10 @@ with tab2:
     c2e, c2f = st.columns(2)
     s2_sec_q = c2e.number_input("Sec Order Qty", min_value=1, value=300, step=50, key="s2_sec_q")
     rec_sec_rop, _ = get_recommendations(s2_sec_demand, s2_sec_std, s2_sec_lt, s2_sec_sl)
+    
     s2_sec_actual_rop = c2f.number_input("Sec Actual ROP", min_value=0, value=int(rec_sec_rop), step=10, key="s2_sec_act")
+    c2f.caption(f"💡 Suggested: **{rec_sec_rop:,.0f}**")
+    
     s2_sec_act_ss, s2_sec_avg_wc, s2_sec_max_wc = get_financials(s2_sec_actual_rop, s2_sec_demand, s2_sec_lt, s2_sec_q, s2_cost)
     
     st.markdown("#### Main (Hub)")
@@ -225,7 +232,10 @@ with tab2:
     c3e, c3f = st.columns(2)
     s2_main_q = c3e.number_input("Main Order Qty", min_value=1, value=800, step=50, key="s2_main_q")
     rec_main_rop, _ = get_recommendations(s2_main_demand, s2_main_std, s2_main_lt, s2_main_sl)
+    
     s2_main_actual_rop = c3f.number_input("Main Actual ROP", min_value=0, value=int(rec_main_rop), step=10, key="s2_main_act")
+    c3f.caption(f"💡 Suggested: **{rec_main_rop:,.0f}**")
+    
     s2_main_act_ss, s2_main_avg_wc, s2_main_max_wc = get_financials(s2_main_actual_rop, s2_main_demand, s2_main_lt, s2_main_q, s2_cost)
 
     st.markdown("---")
@@ -259,7 +269,10 @@ with tab3:
     c4e, c4f = st.columns(2)
     s3_sec_q = c4e.number_input("Sec Order Qty", min_value=1, value=300, step=50, key="s3_sec_q")
     rec_s3_sec_rop, _ = get_recommendations(s3_sec_demand, s3_sec_std, s3_sec_lt, s3_sec_sl)
+    
     s3_sec_actual_rop = c4f.number_input("Sec Actual ROP", min_value=0, value=int(rec_s3_sec_rop), step=10, key="s3_sec_act")
+    c4f.caption(f"💡 Suggested: **{rec_s3_sec_rop:,.0f}**")
+    
     s3_sec_act_ss, s3_sec_avg_wc, s3_sec_max_wc = get_financials(s3_sec_actual_rop, s3_sec_demand, s3_sec_lt, s3_sec_q, s3_cost)
     
     st.markdown("#### Main (Echelon Evaluator)")
@@ -276,7 +289,9 @@ with tab3:
     _, main_base_ss = get_recommendations(s3_main_demand, s3_main_std, s3_main_lt, s3_main_sl)
     rec_echelon_rop = rec_s3_sec_rop + (s3_main_demand * s3_main_lt) + main_base_ss
     
-    s3_echelon_actual_rop = c5f.number_input("Echelon Actual ROP", min_value=0, value=int(rec_echelon_rop), step=10, key="s3_ech_act", help=f"Rec Echelon ROP: {rec_echelon_rop:.0f}")
+    s3_echelon_actual_rop = c5f.number_input("Echelon Actual ROP", min_value=0, value=int(rec_echelon_rop), step=10, key="s3_ech_act")
+    c5f.caption(f"💡 Suggested: **{rec_echelon_rop:,.0f}**")
+    
     s3_main_act_ss, s3_main_avg_wc, s3_main_max_wc = get_financials(s3_echelon_actual_rop - rec_s3_sec_rop, s3_main_demand, s3_main_lt, s3_main_q, s3_cost)
 
     st.markdown("---")
