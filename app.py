@@ -16,7 +16,6 @@ def get_recommendations(demand, std_dev, lead_time, service_level):
 
 def get_financials(actual_rop, demand, lead_time, order_qty, unit_cost):
     """Calculates working capital based on the USER'S chosen ROP."""
-    # Realized safety stock is whatever buffer remains after lead time demand
     actual_ss = max(0, actual_rop - (demand * lead_time))
     avg_working_capital = ((order_qty / 2) + actual_ss) * unit_cost
     max_working_capital = (order_qty + actual_ss) * unit_cost
@@ -86,13 +85,13 @@ with col1:
     s1_cost = st.number_input("Unit Cost ($/unit)", min_value=0.01, value=50.0, step=5.0, key="s1_cost")
     s1_q = st.number_input("Order Quantity (Q)", min_value=1, value=500, step=50, key="s1_q")
     
-    # ROP DECISION BLOCK
-    st.markdown("### 🎯 Set Reorder Point")
+    # Calculations
     rec_s1_rop, rec_s1_ss = get_recommendations(s1_demand, s1_std_dev, s1_lead_time, s1_service_level)
-    st.caption(f"💡 *Mathematically Recommended ROP: {rec_s1_rop:,.0f} units*")
     
-    # THE RESTORED INPUT BOX
+    st.markdown("### 🎯 Set Reorder Point")
+    st.caption(f"💡 *Mathematically Recommended ROP: {rec_s1_rop:,.0f} units*")
     s1_actual_rop = st.number_input("Actual ROP (Scenario 1)", min_value=0, value=int(rec_s1_rop), step=10, key="s1_actual_rop")
+    
     s1_actual_ss, s1_avg_wc, s1_max_wc = get_financials(s1_actual_rop, s1_demand, s1_lead_time, s1_q, s1_cost)
     
     st.markdown("#### Scenario 1 Matrices")
@@ -156,16 +155,72 @@ with col2:
 
     # --- Combined Metrics ---
     st.markdown("### 🎯 Scenario 2 Matrices")
-    
-    st.markdown("**Individual Breakdown:**")
-    st.table({
-        "Metric": ["Avg Working Capital", "Max Working Capital", "Fill Rate Goal", "Realized Safety Stock"],
-        "Secondary Warehouse": [f"${s2_sec_avg_wc:,.2f}", f"${s2_sec_max_wc:,.2f}", f"{s2_sec_sl*100:.1f}%", f"{s2_sec_actual_ss:,.0f} units"],
-        "Main Warehouse": [f"${s2_main_avg_wc:,.2f}", f"${s2_main_max_wc:,.2f}", f"{s2_main_sl*100:.1f}%", f"{s2_main_actual_ss:,.0f} units"]
-    })
-    
-    st.markdown("**Combined System Totals:**")
     sm1, sm2, sm3 = st.columns(3)
-    sm1.metric("Total Avg WC", f"${(s2_sec_avg_wc + s2_main_avg_wc):,.2f}")
-    sm2.metric("Total Max WC", f"${(s2_sec_max_wc + s2_main_max_wc):,.2f}")
-    sm3.metric("Effective Fill Rate", f"{(s2_sec_sl * s2_main_sl)*100:.1f}%")
+    sm1.metric("Total System Avg WC", f"${(s2_sec_avg_wc + s2_main_avg_wc):,.2f}")
+    sm2.metric("Total System Max WC", f"${(s2_sec_max_wc + s2_main_max_wc):,.2f}")
+    sm3.metric("Effective System Fill Rate", f"{(s2_sec_sl * s2_main_sl)*100:.1f}%")
+
+# ==========================================
+# MASTER COMPARISON TABLE
+# ==========================================
+st.markdown("---")
+st.header("📋 Cross-Scenario Parameter & Metric Comparison")
+
+comparison_data = {
+    "Parameter / Metric": [
+        "**Target Fill Rate**",
+        "Average Demand (units/day)",
+        "Standard Deviation",
+        "Lead Time (days)",
+        "Order Quantity (Q)",
+        "Unit Cost ($)",
+        "Recommended ROP",
+        "**Actual ROP**",
+        "Realized Safety Stock",
+        "**Average Working Capital**",
+        "**Max Working Capital**"
+    ],
+    "Scenario 1: Single Central": [
+        f"{s1_service_level*100:.1f}%",
+        f"{s1_demand:,.0f}",
+        f"{s1_std_dev:,.0f}",
+        f"{s1_lead_time:,.0f}",
+        f"{s1_q:,.0f}",
+        f"${s1_cost:,.2f}",
+        f"{rec_s1_rop:,.0f}",
+        f"{s1_actual_rop:,.0f}",
+        f"{s1_actual_ss:,.0f}",
+        f"${s1_avg_wc:,.2f}",
+        f"${s1_max_wc:,.2f}"
+    ],
+    "Scenario 2: Secondary (Front-line)": [
+        f"{s2_sec_sl*100:.1f}%",
+        f"{s2_sec_demand:,.0f}",
+        f"{s2_sec_std:,.0f}",
+        f"{s2_sec_lt:,.0f}",
+        f"{s2_sec_q:,.0f}",
+        f"${s2_cost:,.2f}",
+        f"{rec_sec_rop:,.0f}",
+        f"{s2_sec_actual_rop:,.0f}",
+        f"{s2_sec_actual_ss:,.0f}",
+        f"${s2_sec_avg_wc:,.2f}",
+        f"${s2_sec_max_wc:,.2f}"
+    ],
+    "Scenario 2: Main (Hub)": [
+        f"{s2_main_sl*100:.1f}%",
+        f"{s2_main_demand:,.0f}",
+        f"{s2_main_std:,.0f}",
+        f"{s2_main_lt:,.0f}",
+        f"{s2_main_q:,.0f}",
+        f"${s2_cost:,.2f}",
+        f"{rec_main_rop:,.0f}",
+        f"{s2_main_actual_rop:,.0f}",
+        f"{s2_main_actual_ss:,.0f}",
+        f"${s2_main_avg_wc:,.2f}",
+        f"${s2_main_max_wc:,.2f}"
+    ]
+}
+
+# Render as a clean Streamlit table
+df_comparison = pd.DataFrame(comparison_data)
+st.table(df_comparison.set_index("Parameter / Metric"))
