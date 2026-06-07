@@ -1,7 +1,6 @@
 import streamlit as st
 import numpy as np
 from scipy.stats import norm
-import math
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -12,12 +11,6 @@ def get_recommendations(demand, std_dev, lead_time, service_level):
     safety_stock = max(0, z_score * std_dev * math.sqrt(lead_time))
     rop = max(0, (demand * lead_time) + safety_stock)
     return rop, safety_stock
-
-def get_financials(actual_rop, demand, lead_time, order_qty, unit_cost):
-    actual_ss = max(0, actual_rop - (demand * lead_time))
-    avg_working_capital = ((order_qty / 2) + actual_ss) * unit_cost
-    max_working_capital = (order_qty + actual_ss) * unit_cost
-    return actual_ss, avg_working_capital, max_working_capital
 
 # --- Scenario 1: Single Warehouse Detailed Simulation ---
 def simulate_single_stage_detailed(demand_mean, std_dev, rop, q, lead_time, days, warmup, allow_partial, track_backlogs):
@@ -117,13 +110,11 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
         main_inv += m_arr
         main_pipe_qty -= m_arr
         
-        # Ship old backlogs to Sec
         if main_track_backlogs and main_backlog_to_sec > 0 and main_inv > 0:
             if main_allow_partial:
                 ship_old = min(main_backlog_to_sec, main_inv)
             else:
                 ship_old = main_backlog_to_sec if main_inv >= main_backlog_to_sec else 0
-                
             main_inv -= ship_old
             main_backlog_to_sec -= ship_old
             sec_arrivals[t + int(sec_lt)] += ship_old
@@ -136,7 +127,6 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
         s_arr = sec_arrivals[t]
         sec_pipe_qty -= s_arr
         
-        # Fulfill old customer backlogs
         if sec_track_backlogs and sec_backlog > 0:
             if sec_allow_partial:
                 fill_old = min(s_arr, sec_backlog)
@@ -151,7 +141,6 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
         avail = sec_inv + s_arr_for_today
         dem = sec_demands[t]
         
-        # Fulfill new customer demand
         if sec_allow_partial:
             sales = min(avail, dem)
             shortage = dem - sales
@@ -187,13 +176,9 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
                 ship_now = min(main_inv, sec_q)
             else:
                 ship_now = sec_q if main_inv >= sec_q else 0
-                
             main_inv -= ship_now
             shortage_from_supplier = sec_q - ship_now
-            
-            if main_track_backlogs:
-                main_backlog_to_sec += shortage_from_supplier
-                
+            if main_track_backlogs: main_backlog_to_sec += shortage_from_supplier
             sec_arrivals[t + int(sec_lt)] += ship_now
             sec_pipe_qty += ship_now
 
@@ -206,18 +191,10 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
             main_pipe_qty += main_q
             
         if t >= warmup:
-            # Secondary Row
             sec_rows.append([t-warmup+1, sec_opening, s_arr, sec_opening+s_arr, dem, sales, shortage, sec_backlog, sec_inv, sec_order_given, shortage_from_supplier, sec_pipe_qty])
-            
-            # Main Row tracking
-            main_demand_today = sec_order_given
-            main_sales_today = ship_old + ship_now
-            main_shortage_today = shortage_from_supplier
-            
-            main_rows.append([t-warmup+1, main_opening, m_arr, main_opening+m_arr, main_demand_today, main_sales_today, main_shortage_today, main_backlog_to_sec, main_inv, main_order_given, 0, main_pipe_qty])
+            main_rows.append([t-warmup+1, main_opening, m_arr, main_opening+m_arr, sec_order_given, ship_old + ship_now, shortage_from_supplier, main_backlog_to_sec, main_inv, main_order_given, 0, main_pipe_qty])
 
     cols = ["Day", "Opening Balance", "Order Received", "Available Inv", "Demand", "Sales", "Shortage", "Backlogs", "Closing Balance", "Orders Given", "Shortages from Supplier", "Pipeline Inventory"]
-    
     vol_fr = total_sales / total_dem if total_dem > 0 else 1.0
     csl = 1 - (stockout_days / days)
     return pd.DataFrame(sec_rows, columns=cols), pd.DataFrame(main_rows, columns=cols), vol_fr, csl, main_delay_days
@@ -234,12 +211,10 @@ def render_interactive_chart(df, y_cols):
         if col not in df.columns: continue
         is_pipeline = 'Pipeline' in col
         is_backlog = 'Backlog' in col
-        
         fig.add_trace(go.Scatter(
             x=df['Day'], y=df[col], mode='lines', name=col, 
             line=dict(color=color_map.get(col, '#333333'), width=2 if not is_pipeline else 3),
-            line_shape='hv' if is_pipeline or is_backlog else 'linear',
-            opacity=0.8 if is_pipeline else 1.0
+            line_shape='hv' if is_pipeline or is_backlog else 'linear', opacity=0.8 if is_pipeline else 1.0
         ))
         
     fig.update_layout(
@@ -278,7 +253,7 @@ with tab1:
     s1_cost = col1e.number_input("Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s1_cost")
     s1_q = col1f.number_input("Order Qty (Q)", min_value=1, value=500, step=50, key="s1_q")
     
-    rec_s1_rop, rec_s1_ss = get_recommendations(s1_demand, s1_std_dev, s1_lead_time, s1_service_level)
+    rec_s1_rop, _ = get_recommendations(s1_demand, s1_std_dev, s1_lead_time, s1_service_level)
     s1_actual_rop = col1g.number_input("Actual ROP", min_value=0, value=int(rec_s1_rop), step=10, key="s1_act")
     col1g.caption(f"💡 Suggested: **{rec_s1_rop:,.0f}**")
     
@@ -288,14 +263,17 @@ with tab1:
     s1_track_backlogs = s1_col2.checkbox("Track Backlogs", value=True, key="s1_backlog")
     
     st.markdown("---")
-    s1_act_ss, s1_avg_wc, _ = get_financials(s1_actual_rop, s1_demand, s1_lead_time, s1_q, s1_cost)
     df_s1, vol_fr_1, csl_1 = simulate_single_stage_detailed(s1_demand, s1_std_dev, s1_actual_rop, s1_q, s1_lead_time, sim_days, warmup_days, s1_allow_partial, s1_track_backlogs)
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Avg Working Capital", f"${s1_avg_wc:,.2f}")
-    m2.metric("Realized Safety Stock", f"{s1_act_ss:,.0f} units")
-    m3.metric("Volume Fill Rate (Item)", f"{vol_fr_1*100:.1f}%")
-    m4.metric("Cycle Service Level", f"{csl_1*100:.1f}%")
+    # Exact simulation averages
+    s1_avg_oh = df_s1['Closing Balance'].mean()
+    s1_avg_pipe = df_s1['Pipeline Inventory'].mean()
+    s1_sim_wc = (s1_avg_oh + s1_avg_pipe) * s1_cost
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Simulated Avg Working Capital", f"${s1_sim_wc:,.2f}")
+    m2.metric("Volume Fill Rate (Item)", f"{vol_fr_1*100:.1f}%")
+    m3.metric("Cycle Service Level", f"{csl_1*100:.1f}%")
     
     plot_df1 = pd.DataFrame({'Day': df_s1['Day'], 'On-Hand Inventory': df_s1['Closing Balance'], 'Pipeline Inventory': df_s1['Pipeline Inventory'], 'Backlogged Orders': df_s1['Backlogs'], 'ROP Limit': s1_actual_rop})
     render_interactive_chart(plot_df1, ['On-Hand Inventory', 'Pipeline Inventory', 'Backlogged Orders', 'ROP Limit'])
@@ -304,7 +282,11 @@ with tab1:
 
 # --- TAB 2: TWO-STAGE (LOCAL ROP) ---
 with tab2:
-    s2_cost = st.number_input("Shared Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s2_cost")
+    st.markdown("#### 💵 Unit Costs")
+    c_cost1, c_cost2 = st.columns(2)
+    s2_sec_cost = c_cost1.number_input("Secondary Unit Cost ($)", min_value=0.01, value=60.0, step=5.0, key="s2_sec_cost")
+    s2_main_cost = c_cost2.number_input("Main Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s2_main_cost")
+    st.markdown("---")
     
     st.markdown("#### Secondary (Front-line)")
     c2a, c2b, c2c, c2d = st.columns(4)
@@ -322,8 +304,6 @@ with tab2:
     s2_sec_allow_partial = c2g.checkbox("Allow Partial", value=True, key="s2_sec_partial", help="Secondary fulfilling customers")
     s2_sec_track_backlogs = c2h.checkbox("Track Backlogs", value=True, key="s2_sec_backlog", help="Secondary tracking customer backlogs")
     
-    s2_sec_act_ss, s2_sec_avg_wc, _ = get_financials(s2_sec_actual_rop, s2_sec_demand, s2_sec_lt, s2_sec_q, s2_cost)
-    
     st.markdown("#### Main (Hub)")
     c3a, c3b, c3c, c3d = st.columns(4)
     s2_main_demand = c3a.number_input("Agg Demand", min_value=0.0, value=s2_sec_demand, step=10.0, key="s2_main_d")
@@ -339,14 +319,19 @@ with tab2:
     
     s2_main_allow_partial = c3g.checkbox("Allow Partial", value=True, key="s2_main_partial", help="Main fulfilling Secondary")
     s2_main_track_backlogs = c3h.checkbox("Track Backlogs", value=True, key="s2_main_backlog", help="Main tracking Secondary backlogs")
-    
-    _, s2_main_avg_wc, _ = get_financials(s2_main_actual_rop, s2_main_demand, s2_main_lt, s2_main_q, s2_cost)
 
     st.markdown("---")
     df_sec_s2, df_main_s2, vol_fr_2, csl_2, delay_2 = simulate_two_stage_detailed(s2_sec_demand, s2_sec_std, s2_sec_actual_rop, s2_sec_q, s2_sec_lt, s2_main_actual_rop, s2_main_q, s2_main_lt, sim_days, warmup_days, s2_sec_allow_partial, s2_sec_track_backlogs, s2_main_allow_partial, s2_main_track_backlogs, "installation")
     
+    # Precise Simulation Averages
+    avg_sec_oh_2 = df_sec_s2['Closing Balance'].mean()
+    avg_sec_pipe_2 = df_sec_s2['Pipeline Inventory'].mean()
+    avg_main_oh_2 = df_main_s2['Closing Balance'].mean()
+    avg_main_pipe_2 = df_main_s2['Pipeline Inventory'].mean()
+    total_sys_val_2 = (avg_sec_oh_2 * s2_sec_cost) + (avg_sec_pipe_2 * s2_sec_cost) + (avg_main_oh_2 * s2_main_cost) + (avg_main_pipe_2 * s2_main_cost)
+
     sm1, sm2, sm3, sm4 = st.columns(4)
-    sm1.metric("System Avg WC", f"${(s2_sec_avg_wc + s2_main_avg_wc):,.2f}")
+    sm1.metric("Simulated System Value", f"${total_sys_val_2:,.2f}")
     sm2.metric("Volume Fill Rate (Item)", f"{vol_fr_2*100:.1f}%")
     sm3.metric("Cycle Service Level", f"{csl_2*100:.1f}%")
     sm4.metric("Main Delay Stockouts", f"{delay_2} Days")
@@ -354,6 +339,31 @@ with tab2:
     plot_df2 = pd.DataFrame({'Day': df_sec_s2['Day'], 'Sec On-Hand': df_sec_s2['Closing Balance'], 'Sec Pipeline': df_sec_s2['Pipeline Inventory'], 'Sec Backlogged': df_sec_s2['Backlogs'], 'Main On-Hand': df_main_s2['Closing Balance'], 'Main Pipeline': df_main_s2['Pipeline Inventory']})
     render_interactive_chart(plot_df2, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
     
+    st.markdown("### 💰 Average Inventory & Valuation Summary")
+    
+    # Table 1: Itemized breakdown
+    val_data_1 = {
+        "Asset Location / State": ["Secondary Warehouse (On-Hand)", "Pipeline (Main → Secondary)", "Main Warehouse (On-Hand)", "Pipeline (Supplier → Main)"],
+        "Unit Cost": [f"${s2_sec_cost:,.2f}", f"${s2_sec_cost:,.2f}", f"${s2_main_cost:,.2f}", f"${s2_main_cost:,.2f}"],
+        "Average Units": [f"{avg_sec_oh_2:,.0f}", f"{avg_sec_pipe_2:,.0f}", f"{avg_main_oh_2:,.0f}", f"{avg_main_pipe_2:,.0f}"],
+        "Average Value": [f"${avg_sec_oh_2 * s2_sec_cost:,.2f}", f"${avg_sec_pipe_2 * s2_sec_cost:,.2f}", f"${avg_main_oh_2 * s2_main_cost:,.2f}", f"${avg_main_pipe_2 * s2_main_cost:,.2f}"]
+    }
+    
+    # Table 2: Ownership breakdown
+    val_data_2 = {
+        "Ownership Entity": ["Secondary (Includes Main→Sec Pipeline)", "Main (Includes Sup→Main Pipeline)"],
+        "Average Total Units": [f"{avg_sec_oh_2 + avg_sec_pipe_2:,.0f}", f"{avg_main_oh_2 + avg_main_pipe_2:,.0f}"],
+        "Average Total Value": [f"${(avg_sec_oh_2 + avg_sec_pipe_2) * s2_sec_cost:,.2f}", f"${(avg_main_oh_2 + avg_main_pipe_2) * s2_main_cost:,.2f}"]
+    }
+    
+    tcol1, tcol2 = st.columns(2)
+    with tcol1:
+        st.markdown("**Detailed Location Valuation**")
+        st.table(pd.DataFrame(val_data_1).set_index("Asset Location / State"))
+    with tcol2:
+        st.markdown("**Ownership Valuation (FOB Origin)**")
+        st.table(pd.DataFrame(val_data_2).set_index("Ownership Entity"))
+
     col_t1, col_t2 = st.columns(2)
     with col_t1:
         with st.expander("📋 View Secondary Warehouse Data"): st.dataframe(df_sec_s2, use_container_width=True)
@@ -362,7 +372,11 @@ with tab2:
 
 # --- TAB 3: ECHELON SYSTEM ---
 with tab3:
-    s3_cost = st.number_input("Shared Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s3_cost_t3")
+    st.markdown("#### 💵 Unit Costs")
+    c_cost3, c_cost4 = st.columns(2)
+    s3_sec_cost = c_cost3.number_input("Secondary Unit Cost ($)", min_value=0.01, value=60.0, step=5.0, key="s3_sec_cost")
+    s3_main_cost = c_cost4.number_input("Main Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s3_main_cost")
+    st.markdown("---")
     
     st.markdown("#### Secondary (Front-line)")
     c4a, c4b, c4c, c4d = st.columns(4)
@@ -380,8 +394,6 @@ with tab3:
     s3_sec_allow_partial = c4g.checkbox("Allow Partial", value=True, key="s3_sec_partial")
     s3_sec_track_backlogs = c4h.checkbox("Track Backlogs", value=True, key="s3_sec_backlog")
     
-    _, s3_sec_avg_wc, _ = get_financials(s3_sec_actual_rop, s3_sec_demand, s3_sec_lt, s3_sec_q, s3_cost)
-    
     st.markdown("#### Main (Echelon Evaluator)")
     c5a, c5b, c5c, c5d = st.columns(4)
     s3_main_demand = c5a.number_input("Agg Demand", min_value=0.0, value=s3_sec_demand, step=10.0, key="s3_main_d")
@@ -398,20 +410,50 @@ with tab3:
     
     s3_main_allow_partial = c5g.checkbox("Allow Partial", value=True, key="s3_main_partial")
     s3_main_track_backlogs = c5h.checkbox("Track Backlogs", value=True, key="s3_main_backlog")
-    
-    _, s3_main_avg_wc, _ = get_financials(s3_echelon_actual_rop - rec_s3_sec_rop, s3_main_demand, s3_main_lt, s3_main_q, s3_cost)
 
     st.markdown("---")
     df_sec_s3, df_main_s3, vol_fr_3, csl_3, delay_3 = simulate_two_stage_detailed(s3_sec_demand, s3_sec_std, s3_sec_actual_rop, s3_sec_q, s3_sec_lt, s3_echelon_actual_rop, s3_main_q, s3_main_lt, sim_days, warmup_days, s3_sec_allow_partial, s3_sec_track_backlogs, s3_main_allow_partial, s3_main_track_backlogs, "echelon")
     
+    # Precise Simulation Averages
+    avg_sec_oh_3 = df_sec_s3['Closing Balance'].mean()
+    avg_sec_pipe_3 = df_sec_s3['Pipeline Inventory'].mean()
+    avg_main_oh_3 = df_main_s3['Closing Balance'].mean()
+    avg_main_pipe_3 = df_main_s3['Pipeline Inventory'].mean()
+    total_sys_val_3 = (avg_sec_oh_3 * s3_sec_cost) + (avg_sec_pipe_3 * s3_sec_cost) + (avg_main_oh_3 * s3_main_cost) + (avg_main_pipe_3 * s3_main_cost)
+
     tm1, tm2, tm3, tm4 = st.columns(4)
-    tm1.metric("System Avg WC", f"${(s3_sec_avg_wc + s3_main_avg_wc):,.2f}")
+    tm1.metric("Simulated System Value", f"${total_sys_val_3:,.2f}")
     tm2.metric("Volume Fill Rate (Item)", f"{vol_fr_3*100:.1f}%")
     tm3.metric("Cycle Service Level", f"{csl_3*100:.1f}%")
     tm4.metric("Main Delay Stockouts", f"{delay_3} Days")
 
     plot_df3 = pd.DataFrame({'Day': df_sec_s3['Day'], 'Sec On-Hand': df_sec_s3['Closing Balance'], 'Sec Pipeline': df_sec_s3['Pipeline Inventory'], 'Sec Backlogged': df_sec_s3['Backlogs'], 'Main On-Hand': df_main_s3['Closing Balance'], 'Main Pipeline': df_main_s3['Pipeline Inventory']})
     render_interactive_chart(plot_df3, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
+    
+    st.markdown("### 💰 Average Inventory & Valuation Summary")
+    
+    # Table 1: Itemized breakdown
+    val_data_3a = {
+        "Asset Location / State": ["Secondary Warehouse (On-Hand)", "Pipeline (Main → Secondary)", "Main Warehouse (On-Hand)", "Pipeline (Supplier → Main)"],
+        "Unit Cost": [f"${s3_sec_cost:,.2f}", f"${s3_sec_cost:,.2f}", f"${s3_main_cost:,.2f}", f"${s3_main_cost:,.2f}"],
+        "Average Units": [f"{avg_sec_oh_3:,.0f}", f"{avg_sec_pipe_3:,.0f}", f"{avg_main_oh_3:,.0f}", f"{avg_main_pipe_3:,.0f}"],
+        "Average Value": [f"${avg_sec_oh_3 * s3_sec_cost:,.2f}", f"${avg_sec_pipe_3 * s3_sec_cost:,.2f}", f"${avg_main_oh_3 * s3_main_cost:,.2f}", f"${avg_main_pipe_3 * s3_main_cost:,.2f}"]
+    }
+    
+    # Table 2: Ownership breakdown
+    val_data_3b = {
+        "Ownership Entity": ["Secondary (Includes Main→Sec Pipeline)", "Main (Includes Sup→Main Pipeline)"],
+        "Average Total Units": [f"{avg_sec_oh_3 + avg_sec_pipe_3:,.0f}", f"{avg_main_oh_3 + avg_main_pipe_3:,.0f}"],
+        "Average Total Value": [f"${(avg_sec_oh_3 + avg_sec_pipe_3) * s3_sec_cost:,.2f}", f"${(avg_main_oh_3 + avg_main_pipe_3) * s3_main_cost:,.2f}"]
+    }
+    
+    tcol3, tcol4 = st.columns(2)
+    with tcol3:
+        st.markdown("**Detailed Location Valuation**")
+        st.table(pd.DataFrame(val_data_3a).set_index("Asset Location / State"))
+    with tcol4:
+        st.markdown("**Ownership Valuation (FOB Origin)**")
+        st.table(pd.DataFrame(val_data_3b).set_index("Ownership Entity"))
     
     col_t3, col_t4 = st.columns(2)
     with col_t3:
@@ -426,11 +468,11 @@ st.markdown("---")
 st.header("📋 Master Comparison Summary")
 
 comparison_data = {
-    "Metric": ["Target Fill Rate", "Order Qty (Q)", "Suggested ROP", "Actual Set ROP", "Avg Working Capital", "Stockout Days"],
-    "S1: Central": [f"{s1_service_level*100:.1f}%", f"{s1_q:,.0f}", f"{rec_s1_rop:,.0f}", f"{s1_actual_rop:,.0f}", f"${s1_avg_wc:,.0f}", "N/A"],
-    "S2: Secondary": [f"{s2_sec_sl*100:.1f}%", f"{s2_sec_q:,.0f}", f"{rec_sec_rop:,.0f}", f"{s2_sec_actual_rop:,.0f}", f"${s2_sec_avg_wc:,.0f}", "—"],
-    "S2: Main": [f"{s2_main_sl*100:.1f}%", f"{s2_main_q:,.0f}", f"{rec_main_rop:,.0f}", f"{s2_main_actual_rop:,.0f}", f"${s2_main_avg_wc:,.0f}", f"{delay_2}"],
-    "S3: Secondary": [f"{s3_sec_sl*100:.1f}%", f"{s3_sec_q:,.0f}", f"{rec_s3_sec_rop:,.0f}", f"{s3_sec_actual_rop:,.0f}", f"${s3_sec_avg_wc:,.0f}", "—"],
-    "S3: Main (Echelon)": [f"{s3_main_sl*100:.1f}%", f"{s3_main_q:,.0f}", f"{rec_echelon_rop:,.0f}", f"{s3_echelon_actual_rop:,.0f}", f"${s3_main_avg_wc:,.0f}", f"{delay_3}"]
+    "Metric": ["Target Fill Rate", "Order Qty (Q)", "Suggested ROP", "Actual Set ROP", "Simulated Working Capital", "Stockout Days"],
+    "S1: Central": [f"{s1_service_level*100:.1f}%", f"{s1_q:,.0f}", f"{rec_s1_rop:,.0f}", f"{s1_actual_rop:,.0f}", f"${s1_sim_wc:,.0f}", "N/A"],
+    "S2: Secondary": [f"{s2_sec_sl*100:.1f}%", f"{s2_sec_q:,.0f}", f"{rec_sec_rop:,.0f}", f"{s2_sec_actual_rop:,.0f}", f"${(avg_sec_oh_2+avg_sec_pipe_2)*s2_sec_cost:,.0f}", "—"],
+    "S2: Main": [f"{s2_main_sl*100:.1f}%", f"{s2_main_q:,.0f}", f"{rec_main_rop:,.0f}", f"{s2_main_actual_rop:,.0f}", f"${(avg_main_oh_2+avg_main_pipe_2)*s2_main_cost:,.0f}", f"{delay_2}"],
+    "S3: Secondary": [f"{s3_sec_sl*100:.1f}%", f"{s3_sec_q:,.0f}", f"{rec_s3_sec_rop:,.0f}", f"{s3_sec_actual_rop:,.0f}", f"${(avg_sec_oh_3+avg_sec_pipe_3)*s3_sec_cost:,.0f}", "—"],
+    "S3: Main (Echelon)": [f"{s3_main_sl*100:.1f}%", f"{s3_main_q:,.0f}", f"{rec_echelon_rop:,.0f}", f"{s3_echelon_actual_rop:,.0f}", f"${(avg_main_oh_3+avg_main_pipe_3)*s3_main_cost:,.0f}", f"{delay_3}"]
 }
 st.table(pd.DataFrame(comparison_data).set_index("Metric"))
