@@ -19,15 +19,15 @@ def get_financials(actual_rop, demand, lead_time, order_qty, unit_cost):
     max_working_capital = (order_qty + actual_ss) * unit_cost
     return actual_ss, avg_working_capital, max_working_capital
 
-# --- Scenario 1: Single Warehouse (Vectorized) ---
+# --- Scenario 1: Single Warehouse (Vectorized Monte Carlo) ---
 def simulate_single_stage(demand_mean, std_dev, rop, ss, q, lead_time, days, warmup):
     total_days = warmup + days
     lt = int(lead_time)
     
-    # 1. Vectorized Generation of all Random Demands
+    # 1. Vectorized Random Demand
     demands = np.maximum(0, np.random.normal(demand_mean, std_dev, total_days))
     
-    # 2. Pre-allocate flat NumPy Arrays (Replacing slow Python Lists)
+    # 2. Pre-allocate flat NumPy Arrays
     on_hand = np.zeros(total_days)
     pipeline = np.zeros(total_days)
     arrivals = np.zeros(total_days + lt + 1) 
@@ -37,31 +37,26 @@ def simulate_single_stage(demand_mean, std_dev, rop, ss, q, lead_time, days, war
     stockout_days = 0
     
     for t in range(total_days):
-        # Process Arrivals via array index
         arriving_today = arrivals[t]
         current_inv += arriving_today
         current_pipeline -= arriving_today
         
-        # Fulfill Demand
         current_inv -= demands[t]
         
         if t >= warmup and current_inv < 0:
             stockout_days += 1
             
-        # Check Reorder
         if current_inv + current_pipeline <= rop:
             arrivals[t + lt] += q
             current_pipeline += q
             
-        # Record state
         on_hand[t] = current_inv
         pipeline[t] = current_pipeline
         
-    # Slicing the NumPy arrays directly into Pandas (Instantaneous)
     df = pd.DataFrame({
         'Day': np.arange(1, days + 1),
         'Actual Daily Demand': demands[warmup:],
-        'On-Hand Inventory': np.maximum(0, on_hand[warmup:]), # Floors negatives to 0
+        'On-Hand Inventory': np.maximum(0, on_hand[warmup:]),
         'Pipeline Inventory': pipeline[warmup:],
         'ROP Limit': rop
     })
@@ -69,16 +64,14 @@ def simulate_single_stage(demand_mean, std_dev, rop, ss, q, lead_time, days, war
     simulated_fill_rate = 1 - (stockout_days / days)
     return df, simulated_fill_rate
 
-# --- Scenario 2 & 3: Two-Stage (Vectorized) ---
+# --- Scenario 2 & 3: Two-Stage (Vectorized Monte Carlo) ---
 def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, main_q, main_lt, days, warmup, strategy="installation"):
     total_days = warmup + days
     s_lt = int(sec_lt)
     m_lt = int(main_lt)
     
-    # Vectorized Demand
     sec_demands = np.maximum(0, np.random.normal(sec_demand, sec_std, total_days))
     
-    # Pre-allocate State Arrays
     hist_sec_inv = np.zeros(total_days)
     hist_main_inv = np.zeros(total_days)
     hist_sec_pipe = np.zeros(total_days)
@@ -88,7 +81,6 @@ def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, ma
     main_inv = main_rop + main_q
     sec_inv = sec_rop + sec_q
     
-    # Flat array arrival timelines
     main_arrivals = np.zeros(total_days + m_lt + 1)
     sec_arrivals = np.zeros(total_days + s_lt + 1)
     
@@ -98,29 +90,24 @@ def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, ma
     sec_stockout_days = 0
 
     for t in range(total_days):
-        # 1. Main receives
         main_inv += main_arrivals[t]
         main_pipe_qty -= main_arrivals[t]
 
-        # 2. Main fulfills Backlogs
         while main_backlog >= sec_q and main_inv >= sec_q:
             main_inv -= sec_q
             main_backlog -= sec_q
             sec_arrivals[t + s_lt] += sec_q
             sec_pipe_qty += sec_q
 
-        # 3. Sec receives
         sec_inv += sec_arrivals[t]
         sec_pipe_qty -= sec_arrivals[t]
 
-        # 4. Sec Demand
         sec_inv -= sec_demands[t]
         delayed_by_main = (sec_inv < 0) and (main_backlog > 0)
         
         if t >= warmup and sec_inv < 0:
             sec_stockout_days += 1
 
-        # 5. Sec Order
         sec_pos = sec_inv + sec_pipe_qty + main_backlog
         if sec_pos <= sec_rop:
             if main_inv >= sec_q:
@@ -130,7 +117,6 @@ def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, ma
             else:
                 main_backlog += sec_q 
 
-        # 6. Main Order
         if strategy == "installation":
             main_trigger_pos = main_inv + main_pipe_qty - main_backlog
         elif strategy == "echelon":
@@ -140,14 +126,12 @@ def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, ma
             main_arrivals[t + m_lt] += main_q
             main_pipe_qty += main_q
 
-        # 7. Record State
         hist_sec_inv[t] = sec_inv
         hist_main_inv[t] = main_inv
         hist_sec_pipe[t] = sec_pipe_qty
         hist_main_pipe[t] = main_pipe_qty
         hist_blame[t] = delayed_by_main
 
-    # Slice directly into DataFrame
     df = pd.DataFrame({
         'Day': np.arange(1, days + 1),
         'Daily Demand': sec_demands[warmup:],
@@ -175,9 +159,18 @@ def render_interactive_chart(df, y_cols, colors):
         ))
         
     fig.update_layout(
-        xaxis_title="Day", yaxis_title="Units", hovermode="x unified",
-        margin=dict(l=0, r=0, t=30, b=0), plot_bgcolor='rgba(0,0,0,0)',
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        xaxis_title="Day", 
+        yaxis_title="Units", 
+        hovermode="x unified",
+        margin=dict(l=0, r=0, t=30, b=80), # Margin created for bottom legend
+        plot_bgcolor='rgba(0,0,0,0)',
+        legend=dict(
+            orientation="h", 
+            yanchor="top", 
+            y=-0.2, # Shifted fully below the chart to avoid modebar overlap
+            xanchor="center", 
+            x=0.5
+        )
     )
     fig.update_yaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
     fig.update_xaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
@@ -192,6 +185,7 @@ st.title("📦 Supply Chain Scenario Architect")
 # GLOBAL SETTINGS
 # ==========================================
 st.markdown("### ⚙️ Global Simulation Settings")
+st.markdown("Adjust these sliders to define the simulation horizon. The **Warm-up Period** runs invisibly to stabilize the supply chain.")
 col_g1, col_g2 = st.columns(2)
 warmup_days = col_g1.number_input("Warm-up Period", min_value=0, value=150, step=30)
 sim_days = col_g2.number_input("Display Period (Days plotted)", min_value=10, value=300, step=30)
