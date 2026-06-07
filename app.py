@@ -250,24 +250,21 @@ tab1, tab2, tab3 = st.tabs(["🏢 Scenario 1: Single Central", "🏬 Scenario 2:
 
 # --- TAB 1: SINGLE WAREHOUSE ---
 with tab1:
+    st.markdown("#### Central Warehouse")
     col1a, col1b, col1c, col1d = st.columns(4)
     s1_demand = col1a.number_input("Avg Demand/Day", min_value=0.0, value=100.0, step=10.0, key="s1_d")
     s1_std_dev = col1b.number_input("Demand Std Dev", min_value=0.0, value=20.0, step=5.0, key="s1_std")
     s1_lead_time = col1c.number_input("Lead Time (days)", min_value=0.0, value=7.0, step=1.0, key="s1_lt")
     s1_service_level = col1d.slider("Target Fill Rate", 0.50, 0.999, 0.95, key="s1_sl")
     
-    col1e, col1f, col1g = st.columns(3)
+    col1e, col1f, col1g, col1h, col1i = st.columns(5)
     s1_cost = col1e.number_input("Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s1_cost")
     s1_q = col1f.number_input("Order Qty (Q)", min_value=1, value=500, step=50, key="s1_q")
-    
     rec_s1_rop, _ = get_recommendations(s1_demand, s1_std_dev, s1_lead_time, s1_service_level)
     s1_actual_rop = col1g.number_input("Actual ROP", min_value=0, value=int(rec_s1_rop), step=10, key="s1_act")
     col1g.caption(f"💡 Suggested: **{rec_s1_rop:,.0f}**")
-    
-    st.markdown("#### Fulfillment Rules")
-    s1_col1, s1_col2 = st.columns(2)
-    s1_allow_partial = s1_col1.checkbox("Allow Partial Fulfillment", value=True, key="s1_partial")
-    s1_track_backlogs = s1_col2.checkbox("Track Backlogs", value=True, key="s1_backlog")
+    s1_allow_partial = col1h.checkbox("Allow Partial", value=True, key="s1_partial", help="Ship available inventory even if it doesn't cover the full order.")
+    s1_track_backlogs = col1i.checkbox("Track Backlogs", value=True, key="s1_backlog", help="Unmet demand goes into a backlog queue instead of being permanently lost.")
     
     st.markdown("---")
     df_s1, vol_fr_1, csl_1 = simulate_single_stage_detailed(s1_demand, s1_std_dev, s1_actual_rop, s1_q, s1_lead_time, sim_days, warmup_days, s1_allow_partial, s1_track_backlogs)
@@ -315,12 +312,6 @@ with tab1:
 
 # --- TAB 2: TWO-STAGE (LOCAL ROP) ---
 with tab2:
-    st.markdown("#### 💵 Unit Costs")
-    c_cost1, c_cost2 = st.columns(2)
-    s2_sec_cost = c_cost1.number_input("Secondary Unit Cost ($)", min_value=0.01, value=60.0, step=5.0, key="s2_sec_cost")
-    s2_main_cost = c_cost2.number_input("Main Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s2_main_cost")
-    st.markdown("---")
-    
     st.markdown("#### Secondary (Front-line)")
     c2a, c2b, c2c, c2d = st.columns(4)
     s2_sec_demand = c2a.number_input("Demand/Day", min_value=0.0, value=100.0, step=10.0, key="s2_sec_d")
@@ -328,14 +319,14 @@ with tab2:
     s2_sec_lt = c2c.number_input("Transit LT", min_value=0.0, value=3.0, step=1.0, key="s2_sec_lt")
     s2_sec_sl = c2d.slider("Sec Target Fill Rate", 0.50, 0.999, 0.95, key="s2_sec_sl")
     
-    c2e, c2f, c2g, c2h = st.columns(4)
-    s2_sec_q = c2e.number_input("Sec Order Qty", min_value=1, value=300, step=50, key="s2_sec_q")
+    c2e, c2f, c2g, c2h, c2i = st.columns(5)
+    s2_sec_cost = c2e.number_input("Unit Cost ($)", min_value=0.01, value=60.0, step=5.0, key="s2_sec_cost")
+    s2_sec_q = c2f.number_input("Order Qty", min_value=1, value=300, step=50, key="s2_sec_q")
     rec_sec_rop, _ = get_recommendations(s2_sec_demand, s2_sec_std, s2_sec_lt, s2_sec_sl)
-    s2_sec_actual_rop = c2f.number_input("Sec Actual ROP", min_value=0, value=int(rec_sec_rop), step=10, key="s2_sec_act")
-    c2f.caption(f"💡 Suggested: **{rec_sec_rop:,.0f}**")
-    
-    s2_sec_allow_partial = c2g.checkbox("Allow Partial", value=True, key="s2_sec_partial", help="Secondary fulfilling customers")
-    s2_sec_track_backlogs = c2h.checkbox("Track Backlogs", value=True, key="s2_sec_backlog", help="Secondary tracking customer backlogs")
+    s2_sec_actual_rop = c2g.number_input("Actual ROP", min_value=0, value=int(rec_sec_rop), step=10, key="s2_sec_act")
+    c2g.caption(f"💡 Suggested: **{rec_sec_rop:,.0f}**")
+    s2_sec_allow_partial = c2h.checkbox("Allow Partial", value=True, key="s2_sec_partial", help="Secondary fulfilling customers")
+    s2_sec_track_backlogs = c2i.checkbox("Track Backlogs", value=True, key="s2_sec_backlog", help="Secondary tracking customer backlogs")
     
     st.markdown("#### Main (Hub)")
     c3a, c3b, c3c, c3d = st.columns(4)
@@ -344,14 +335,14 @@ with tab2:
     s2_main_lt = c3c.number_input("Supplier LT", min_value=0.0, value=10.0, step=1.0, key="s2_main_lt")
     s2_main_sl = c3d.slider("Main Target Fill Rate", 0.50, 0.999, 0.98, key="s2_main_sl")
     
-    c3e, c3f, c3g, c3h = st.columns(4)
-    s2_main_q = c3e.number_input("Main Order Qty", min_value=1, value=800, step=50, key="s2_main_q")
+    c3e, c3f, c3g, c3h, c3i = st.columns(5)
+    s2_main_cost = c3e.number_input("Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s2_main_cost")
+    s2_main_q = c3f.number_input("Order Qty", min_value=1, value=800, step=50, key="s2_main_q")
     rec_main_rop, _ = get_recommendations(s2_main_demand, s2_main_std, s2_main_lt, s2_main_sl)
-    s2_main_actual_rop = c3f.number_input("Main Actual ROP", min_value=0, value=int(rec_main_rop), step=10, key="s2_main_act")
-    c3f.caption(f"💡 Suggested: **{rec_main_rop:,.0f}**")
-    
-    s2_main_allow_partial = c3g.checkbox("Allow Partial", value=True, key="s2_main_partial", help="Main fulfilling Secondary")
-    s2_main_track_backlogs = c3h.checkbox("Track Backlogs", value=True, key="s2_main_backlog", help="Main tracking Secondary backlogs")
+    s2_main_actual_rop = c3g.number_input("Actual ROP", min_value=0, value=int(rec_main_rop), step=10, key="s2_main_act")
+    c3g.caption(f"💡 Suggested: **{rec_main_rop:,.0f}**")
+    s2_main_allow_partial = c3h.checkbox("Allow Partial", value=True, key="s2_main_partial", help="Main fulfilling Secondary")
+    s2_main_track_backlogs = c3i.checkbox("Track Backlogs", value=True, key="s2_main_backlog", help="Main tracking Secondary backlogs")
 
     st.markdown("---")
     df_sec_s2, df_main_s2, vol_fr_2, csl_2, delay_2 = simulate_two_stage_detailed(s2_sec_demand, s2_sec_std, s2_sec_actual_rop, s2_sec_q, s2_sec_lt, s2_main_actual_rop, s2_main_q, s2_main_lt, sim_days, warmup_days, s2_sec_allow_partial, s2_sec_track_backlogs, s2_main_allow_partial, s2_main_track_backlogs, "installation")
@@ -405,12 +396,6 @@ with tab2:
 
 # --- TAB 3: ECHELON SYSTEM ---
 with tab3:
-    st.markdown("#### 💵 Unit Costs")
-    c_cost3, c_cost4 = st.columns(2)
-    s3_sec_cost = c_cost3.number_input("Secondary Unit Cost ($)", min_value=0.01, value=60.0, step=5.0, key="s3_sec_cost")
-    s3_main_cost = c_cost4.number_input("Main Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s3_main_cost")
-    st.markdown("---")
-    
     st.markdown("#### Secondary (Front-line)")
     c4a, c4b, c4c, c4d = st.columns(4)
     s3_sec_demand = c4a.number_input("Demand/Day", min_value=0.0, value=100.0, step=10.0, key="s3_sec_d")
@@ -418,14 +403,14 @@ with tab3:
     s3_sec_lt = c4c.number_input("Transit LT", min_value=0.0, value=3.0, step=1.0, key="s3_sec_lt")
     s3_sec_sl = c4d.slider("Sec Target Fill Rate", 0.50, 0.999, 0.95, key="s3_sec_sl")
     
-    c4e, c4f, c4g, c4h = st.columns(4)
-    s3_sec_q = c4e.number_input("Sec Order Qty", min_value=1, value=300, step=50, key="s3_sec_q")
+    c4e, c4f, c4g, c4h, c4i = st.columns(5)
+    s3_sec_cost = c4e.number_input("Unit Cost ($)", min_value=0.01, value=60.0, step=5.0, key="s3_sec_cost")
+    s3_sec_q = c4f.number_input("Sec Order Qty", min_value=1, value=300, step=50, key="s3_sec_q")
     rec_s3_sec_rop, _ = get_recommendations(s3_sec_demand, s3_sec_std, s3_sec_lt, s3_sec_sl)
-    s3_sec_actual_rop = c4f.number_input("Sec Actual ROP", min_value=0, value=int(rec_s3_sec_rop), step=10, key="s3_sec_act")
-    c4f.caption(f"💡 Suggested: **{rec_s3_sec_rop:,.0f}**")
-    
-    s3_sec_allow_partial = c4g.checkbox("Allow Partial", value=True, key="s3_sec_partial")
-    s3_sec_track_backlogs = c4h.checkbox("Track Backlogs", value=True, key="s3_sec_backlog")
+    s3_sec_actual_rop = c4g.number_input("Sec Actual ROP", min_value=0, value=int(rec_s3_sec_rop), step=10, key="s3_sec_act")
+    c4g.caption(f"💡 Suggested: **{rec_s3_sec_rop:,.0f}**")
+    s3_sec_allow_partial = c4h.checkbox("Allow Partial", value=True, key="s3_sec_partial")
+    s3_sec_track_backlogs = c4i.checkbox("Track Backlogs", value=True, key="s3_sec_backlog")
     
     st.markdown("#### Main (Echelon Evaluator)")
     c5a, c5b, c5c, c5d = st.columns(4)
@@ -434,15 +419,15 @@ with tab3:
     s3_main_lt = c5c.number_input("Supplier LT", min_value=0.0, value=10.0, step=1.0, key="s3_main_lt")
     s3_main_sl = c5d.slider("Main Target Fill Rate", 0.50, 0.999, 0.98, key="s3_main_sl")
     
-    c5e, c5f, c5g, c5h = st.columns(4)
-    s3_main_q = c5e.number_input("Main Order Qty", min_value=1, value=800, step=50, key="s3_main_q")
+    c5e, c5f, c5g, c5h, c5i = st.columns(5)
+    s3_main_cost = c5e.number_input("Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s3_main_cost")
+    s3_main_q = c5f.number_input("Main Order Qty", min_value=1, value=800, step=50, key="s3_main_q")
     _, main_base_ss = get_recommendations(s3_main_demand, s3_main_std, s3_main_lt, s3_main_sl)
     rec_echelon_rop = rec_s3_sec_rop + (s3_main_demand * s3_main_lt) + main_base_ss
-    s3_echelon_actual_rop = c5f.number_input("Echelon Actual ROP", min_value=0, value=int(rec_echelon_rop), step=10, key="s3_ech_act")
-    c5f.caption(f"💡 Suggested: **{rec_echelon_rop:,.0f}**")
-    
-    s3_main_allow_partial = c5g.checkbox("Allow Partial", value=True, key="s3_main_partial")
-    s3_main_track_backlogs = c5h.checkbox("Track Backlogs", value=True, key="s3_main_backlog")
+    s3_echelon_actual_rop = c5g.number_input("Echelon Actual ROP", min_value=0, value=int(rec_echelon_rop), step=10, key="s3_ech_act")
+    c5g.caption(f"💡 Suggested: **{rec_echelon_rop:,.0f}**")
+    s3_main_allow_partial = c5h.checkbox("Allow Partial", value=True, key="s3_main_partial")
+    s3_main_track_backlogs = c5i.checkbox("Track Backlogs", value=True, key="s3_main_backlog")
 
     st.markdown("---")
     df_sec_s3, df_main_s3, vol_fr_3, csl_3, delay_3 = simulate_two_stage_detailed(s3_sec_demand, s3_sec_std, s3_sec_actual_rop, s3_sec_q, s3_sec_lt, s3_echelon_actual_rop, s3_main_q, s3_main_lt, sim_days, warmup_days, s3_sec_allow_partial, s3_sec_track_backlogs, s3_main_allow_partial, s3_main_track_backlogs, "echelon")
