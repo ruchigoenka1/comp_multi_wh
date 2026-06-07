@@ -4,6 +4,16 @@ from scipy.stats import norm
 import pandas as pd
 import plotly.graph_objects as go
 import math
+import io
+
+# --- Helper: Excel Downloader ---
+def convert_df_to_excel(df):
+    output = io.BytesIO()
+    # Using xlsxwriter engine to create the excel file in memory
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Daily Data')
+    processed_data = output.getvalue()
+    return processed_data
 
 # --- Core Financial Calculations ---
 def get_recommendations(demand, std_dev, lead_time, service_level):
@@ -39,12 +49,9 @@ def simulate_single_stage_detailed(demand_mean, std_dev, rop, q, lead_time, days
         arr = arrivals[t]
         pipe_qty -= arr
         
-        # Fulfill old backlogs
         if track_backlogs and backlog > 0:
-            if allow_partial:
-                fill_old = min(arr, backlog)
-            else:
-                fill_old = backlog if arr >= backlog else 0
+            if allow_partial: fill_old = min(arr, backlog)
+            else: fill_old = backlog if arr >= backlog else 0
             backlog -= fill_old
             arr_for_today = arr - fill_old
         else:
@@ -54,7 +61,6 @@ def simulate_single_stage_detailed(demand_mean, std_dev, rop, q, lead_time, days
         avail = inv + arr_for_today
         dem = demands[t]
         
-        # Fulfill new demand
         if allow_partial:
             sales = min(avail, dem)
             shortage = dem - sales
@@ -118,10 +124,8 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
         main_pipe_qty -= m_arr
         
         if main_track_backlogs and main_backlog_to_sec > 0 and main_inv > 0:
-            if main_allow_partial:
-                ship_old = min(main_backlog_to_sec, main_inv)
-            else:
-                ship_old = main_backlog_to_sec if main_inv >= main_backlog_to_sec else 0
+            if main_allow_partial: ship_old = min(main_backlog_to_sec, main_inv)
+            else: ship_old = main_backlog_to_sec if main_inv >= main_backlog_to_sec else 0
             main_inv -= ship_old
             main_backlog_to_sec -= ship_old
             sec_arrivals[t + int(sec_lt)] += ship_old
@@ -135,10 +139,8 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
         sec_pipe_qty -= s_arr
         
         if sec_track_backlogs and sec_backlog > 0:
-            if sec_allow_partial:
-                fill_old = min(s_arr, sec_backlog)
-            else:
-                fill_old = sec_backlog if s_arr >= sec_backlog else 0
+            if sec_allow_partial: fill_old = min(s_arr, sec_backlog)
+            else: fill_old = sec_backlog if s_arr >= sec_backlog else 0
             sec_backlog -= fill_old
             s_arr_for_today = s_arr - fill_old
         else:
@@ -179,10 +181,8 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
         
         if sec_pos <= sec_rop:
             sec_order_given = sec_q
-            if main_allow_partial:
-                ship_now = min(main_inv, sec_q)
-            else:
-                ship_now = sec_q if main_inv >= sec_q else 0
+            if main_allow_partial: ship_now = min(main_inv, sec_q)
+            else: ship_now = sec_q if main_inv >= sec_q else 0
             main_inv -= ship_now
             shortage_from_supplier = sec_q - ship_now
             if main_track_backlogs: main_backlog_to_sec += shortage_from_supplier
@@ -248,7 +248,9 @@ st.markdown("---")
 
 tab1, tab2, tab3 = st.tabs(["🏢 Scenario 1: Single Central", "🏬 Scenario 2: Two-Stage (Local ROP)", "🌍 Scenario 3: Multi-Echelon"])
 
-# --- TAB 1: SINGLE WAREHOUSE ---
+# ==========================================
+# TAB 1: SINGLE WAREHOUSE
+# ==========================================
 with tab1:
     st.markdown("#### Central Warehouse Variables")
     col1a, col1b, col1c, col1d = st.columns(4)
@@ -274,14 +276,11 @@ with tab1:
     st.markdown("---")
     df_s1, vol_fr_1, csl_1 = simulate_single_stage_detailed(s1_demand, s1_std_dev, s1_actual_rop, s1_q, s1_lead_time, sim_days, warmup_days, s1_allow_partial, s1_track_backlogs)
 
-    # Exact simulation averages & peaks (Updated with separate pipeline cost)
     s1_avg_oh = df_s1['Closing Balance'].mean()
     s1_avg_pipe = df_s1['Pipeline Inventory'].mean()
     s1_sim_wc = (s1_avg_oh * s1_cost) + (s1_avg_pipe * s1_pipeline_cost)
-    
     s1_daily_wc = (df_s1['Closing Balance'] * s1_cost) + (df_s1['Pipeline Inventory'] * s1_pipeline_cost)
     s1_peak_wc = s1_daily_wc.max()
-    
     tot_sales_1 = df_s1['Sales'].sum()
 
     m1, m2, m3, m4, m5 = st.columns(5)
@@ -294,22 +293,18 @@ with tab1:
     plot_df1 = pd.DataFrame({'Day': df_s1['Day'], 'On-Hand Inventory': df_s1['Closing Balance'], 'Pipeline Inventory': df_s1['Pipeline Inventory'], 'Backlogged Orders': df_s1['Backlogs'], 'ROP Limit': s1_actual_rop})
     render_interactive_chart(plot_df1, ['On-Hand Inventory', 'Pipeline Inventory', 'Backlogged Orders', 'ROP Limit'])
     
-    # Financial Valuation Tables for Tab 1
     st.markdown("### 💰 Average Inventory & Valuation Summary")
-    
     val_data_1a = {
         "Asset Location / State": ["Central Warehouse (On-Hand)", "Pipeline (Supplier → Central)"],
         "Unit Cost": [f"${s1_cost:,.2f}", f"${s1_pipeline_cost:,.2f}"],
         "Average Units": [f"{s1_avg_oh:,.0f}", f"{s1_avg_pipe:,.0f}"],
         "Average Value": [f"${s1_avg_oh * s1_cost:,.2f}", f"${s1_avg_pipe * s1_pipeline_cost:,.2f}"]
     }
-    
     val_data_1b = {
         "Ownership Entity": ["Central Facility (Total System)"],
         "Average Total Units": [f"{s1_avg_oh + s1_avg_pipe:,.0f}"],
         "Average Total Value": [f"${s1_sim_wc:,.2f}"]
     }
-    
     tcol1_1, tcol1_2 = st.columns(2)
     with tcol1_1:
         st.markdown("**Detailed Location Valuation**")
@@ -317,10 +312,31 @@ with tab1:
     with tcol1_2:
         st.markdown("**Ownership Valuation**")
         st.table(pd.DataFrame(val_data_1b).set_index("Ownership Entity"))
-    
-    with st.expander("📋 View Daily Data Table"): st.dataframe(df_s1, use_container_width=True)
 
-# --- TAB 2: TWO-STAGE (LOCAL ROP) ---
+    # --- NEW: Focused Daily Tracking for Tab 1 ---
+    st.markdown("### 📅 Daily Inventory Tracking")
+    
+    df_tab1_daily = df_s1[['Day', 'Closing Balance', 'Pipeline Inventory']].copy()
+    df_tab1_daily.rename(columns={'Closing Balance': 'On-Hand Inventory (Units)'}, inplace=True)
+    
+    col_dl1, col_dl2 = st.columns([3, 1])
+    with col_dl1:
+        st.dataframe(df_tab1_daily, use_container_width=True, height=250)
+    with col_dl2:
+        st.write("Download this table as an Excel file:")
+        st.download_button(
+            label="📥 Download Excel",
+            data=convert_df_to_excel(df_tab1_daily),
+            file_name="central_warehouse_daily_inventory.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_tab1"
+        )
+    
+    with st.expander("📋 View Complete Detailed Data Table"): st.dataframe(df_s1, use_container_width=True)
+
+# ==========================================
+# TAB 2: TWO-STAGE (LOCAL ROP)
+# ==========================================
 with tab2:
     st.markdown("#### Secondary (Front-line)")
     c2a, c2b, c2c, c2d = st.columns(4)
@@ -357,16 +373,13 @@ with tab2:
     st.markdown("---")
     df_sec_s2, df_main_s2, vol_fr_2, csl_2, delay_2 = simulate_two_stage_detailed(s2_sec_demand, s2_sec_std, s2_sec_actual_rop, s2_sec_q, s2_sec_lt, s2_main_actual_rop, s2_main_q, s2_main_lt, sim_days, warmup_days, s2_sec_allow_partial, s2_sec_track_backlogs, s2_main_allow_partial, s2_main_track_backlogs, "installation")
     
-    # Precise Simulation Averages & Peaks
     avg_sec_oh_2 = df_sec_s2['Closing Balance'].mean()
     avg_sec_pipe_2 = df_sec_s2['Pipeline Inventory'].mean()
     avg_main_oh_2 = df_main_s2['Closing Balance'].mean()
     avg_main_pipe_2 = df_main_s2['Pipeline Inventory'].mean()
     total_sys_val_2 = (avg_sec_oh_2 * s2_sec_cost) + (avg_sec_pipe_2 * s2_sec_cost) + (avg_main_oh_2 * s2_main_cost) + (avg_main_pipe_2 * s2_main_cost)
-    
     s2_daily_sys_val = (df_sec_s2['Closing Balance'] + df_sec_s2['Pipeline Inventory']) * s2_sec_cost + (df_main_s2['Closing Balance'] + df_main_s2['Pipeline Inventory']) * s2_main_cost
     peak_sys_val_2 = s2_daily_sys_val.max()
-    
     tot_sales_2 = df_sec_s2['Sales'].sum()
 
     sm1, sm2, sm3, sm4, sm5, sm6 = st.columns(6)
@@ -381,20 +394,17 @@ with tab2:
     render_interactive_chart(plot_df2, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
     
     st.markdown("### 💰 Average Inventory & Valuation Summary")
-    
     val_data_2a = {
         "Asset Location / State": ["Secondary Warehouse (On-Hand)", "Pipeline (Main → Secondary)", "Main Warehouse (On-Hand)", "Pipeline (Supplier → Main)"],
         "Unit Cost": [f"${s2_sec_cost:,.2f}", f"${s2_sec_cost:,.2f}", f"${s2_main_cost:,.2f}", f"${s2_main_cost:,.2f}"],
         "Average Units": [f"{avg_sec_oh_2:,.0f}", f"{avg_sec_pipe_2:,.0f}", f"{avg_main_oh_2:,.0f}", f"{avg_main_pipe_2:,.0f}"],
         "Average Value": [f"${avg_sec_oh_2 * s2_sec_cost:,.2f}", f"${avg_sec_pipe_2 * s2_sec_cost:,.2f}", f"${avg_main_oh_2 * s2_main_cost:,.2f}", f"${avg_main_pipe_2 * s2_main_cost:,.2f}"]
     }
-    
     val_data_2b = {
         "Ownership Entity": ["Secondary (Includes Main→Sec Pipeline)", "Main (Includes Sup→Main Pipeline)"],
         "Average Total Units": [f"{avg_sec_oh_2 + avg_sec_pipe_2:,.0f}", f"{avg_main_oh_2 + avg_main_pipe_2:,.0f}"],
         "Average Total Value": [f"${(avg_sec_oh_2 + avg_sec_pipe_2) * s2_sec_cost:,.2f}", f"${(avg_main_oh_2 + avg_main_pipe_2) * s2_main_cost:,.2f}"]
     }
-    
     tcol2_1, tcol2_2 = st.columns(2)
     with tcol2_1:
         st.markdown("**Detailed Location Valuation**")
@@ -405,11 +415,13 @@ with tab2:
 
     col_t1, col_t2 = st.columns(2)
     with col_t1:
-        with st.expander("📋 View Secondary Warehouse Data"): st.dataframe(df_sec_s2, use_container_width=True)
+        with st.expander("📋 View Secondary Detailed Data"): st.dataframe(df_sec_s2, use_container_width=True)
     with col_t2:
-        with st.expander("📋 View Main Warehouse Data"): st.dataframe(df_main_s2, use_container_width=True)
+        with st.expander("📋 View Main Detailed Data"): st.dataframe(df_main_s2, use_container_width=True)
 
-# --- TAB 3: ECHELON SYSTEM ---
+# ==========================================
+# TAB 3: ECHELON SYSTEM
+# ==========================================
 with tab3:
     st.markdown("#### Secondary (Front-line)")
     c4a, c4b, c4c, c4d = st.columns(4)
@@ -447,16 +459,13 @@ with tab3:
     st.markdown("---")
     df_sec_s3, df_main_s3, vol_fr_3, csl_3, delay_3 = simulate_two_stage_detailed(s3_sec_demand, s3_sec_std, s3_sec_actual_rop, s3_sec_q, s3_sec_lt, s3_echelon_actual_rop, s3_main_q, s3_main_lt, sim_days, warmup_days, s3_sec_allow_partial, s3_sec_track_backlogs, s3_main_allow_partial, s3_main_track_backlogs, "echelon")
     
-    # Precise Simulation Averages & Peaks
     avg_sec_oh_3 = df_sec_s3['Closing Balance'].mean()
     avg_sec_pipe_3 = df_sec_s3['Pipeline Inventory'].mean()
     avg_main_oh_3 = df_main_s3['Closing Balance'].mean()
     avg_main_pipe_3 = df_main_s3['Pipeline Inventory'].mean()
     total_sys_val_3 = (avg_sec_oh_3 * s3_sec_cost) + (avg_sec_pipe_3 * s3_sec_cost) + (avg_main_oh_3 * s3_main_cost) + (avg_main_pipe_3 * s3_main_cost)
-    
     s3_daily_sys_val = (df_sec_s3['Closing Balance'] + df_sec_s3['Pipeline Inventory']) * s3_sec_cost + (df_main_s3['Closing Balance'] + df_main_s3['Pipeline Inventory']) * s3_main_cost
     peak_sys_val_3 = s3_daily_sys_val.max()
-    
     tot_sales_3 = df_sec_s3['Sales'].sum()
 
     tm1, tm2, tm3, tm4, tm5, tm6 = st.columns(6)
@@ -471,20 +480,17 @@ with tab3:
     render_interactive_chart(plot_df3, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
     
     st.markdown("### 💰 Average Inventory & Valuation Summary")
-    
     val_data_3a = {
         "Asset Location / State": ["Secondary Warehouse (On-Hand)", "Pipeline (Main → Secondary)", "Main Warehouse (On-Hand)", "Pipeline (Supplier → Main)"],
         "Unit Cost": [f"${s3_sec_cost:,.2f}", f"${s3_sec_cost:,.2f}", f"${s3_main_cost:,.2f}", f"${s3_main_cost:,.2f}"],
         "Average Units": [f"{avg_sec_oh_3:,.0f}", f"{avg_sec_pipe_3:,.0f}", f"{avg_main_oh_3:,.0f}", f"{avg_main_pipe_3:,.0f}"],
         "Average Value": [f"${avg_sec_oh_3 * s3_sec_cost:,.2f}", f"${avg_sec_pipe_3 * s3_sec_cost:,.2f}", f"${avg_main_oh_3 * s3_main_cost:,.2f}", f"${avg_main_pipe_3 * s3_main_cost:,.2f}"]
     }
-    
     val_data_3b = {
         "Ownership Entity": ["Secondary (Includes Main→Sec Pipeline)", "Main (Includes Sup→Main Pipeline)"],
         "Average Total Units": [f"{avg_sec_oh_3 + avg_sec_pipe_3:,.0f}", f"{avg_main_oh_3 + avg_main_pipe_3:,.0f}"],
         "Average Total Value": [f"${(avg_sec_oh_3 + avg_sec_pipe_3) * s3_sec_cost:,.2f}", f"${(avg_main_oh_3 + avg_main_pipe_3) * s3_main_cost:,.2f}"]
     }
-    
     tcol3_1, tcol3_2 = st.columns(2)
     with tcol3_1:
         st.markdown("**Detailed Location Valuation**")
@@ -493,11 +499,36 @@ with tab3:
         st.markdown("**Ownership Valuation (FOB Origin)**")
         st.table(pd.DataFrame(val_data_3b).set_index("Ownership Entity"))
     
+    # --- NEW: Focused Daily Tracking for Tab 3 ---
+    st.markdown("### 📅 Daily Inventory Tracking (System-Wide)")
+    
+    # Combine Secondary and Main daily inventory statuses
+    df_tab3_daily = pd.DataFrame({
+        'Day': df_sec_s3['Day'],
+        'Secondary On-Hand': df_sec_s3['Closing Balance'],
+        'Secondary Pipeline': df_sec_s3['Pipeline Inventory'],
+        'Main On-Hand': df_main_s3['Closing Balance'],
+        'Main Pipeline': df_main_s3['Pipeline Inventory']
+    })
+    
+    col_dl3, col_dl4 = st.columns([3, 1])
+    with col_dl3:
+        st.dataframe(df_tab3_daily, use_container_width=True, height=250)
+    with col_dl4:
+        st.write("Download this table as an Excel file:")
+        st.download_button(
+            label="📥 Download Excel",
+            data=convert_df_to_excel(df_tab3_daily),
+            file_name="multi_echelon_daily_inventory.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_tab3"
+        )
+
     col_t3, col_t4 = st.columns(2)
     with col_t3:
-        with st.expander("📋 View Secondary Warehouse Data"): st.dataframe(df_sec_s3, use_container_width=True)
+        with st.expander("📋 View Secondary Detailed Data"): st.dataframe(df_sec_s3, use_container_width=True)
     with col_t4:
-        with st.expander("📋 View Main Warehouse Data"): st.dataframe(df_main_s3, use_container_width=True)
+        with st.expander("📋 View Main Detailed Data"): st.dataframe(df_main_s3, use_container_width=True)
 
 # ==========================================
 # MASTER COMPARISON TABLE
