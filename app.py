@@ -250,31 +250,36 @@ tab1, tab2, tab3 = st.tabs(["🏢 Scenario 1: Single Central", "🏬 Scenario 2:
 
 # --- TAB 1: SINGLE WAREHOUSE ---
 with tab1:
-    st.markdown("#### Central Warehouse")
+    st.markdown("#### Central Warehouse Variables")
     col1a, col1b, col1c, col1d = st.columns(4)
     s1_demand = col1a.number_input("Avg Demand/Day", min_value=0.0, value=100.0, step=10.0, key="s1_d")
     s1_std_dev = col1b.number_input("Demand Std Dev", min_value=0.0, value=20.0, step=5.0, key="s1_std")
     s1_lead_time = col1c.number_input("Lead Time (days)", min_value=0.0, value=7.0, step=1.0, key="s1_lt")
     s1_service_level = col1d.slider("Target Fill Rate", 0.50, 0.999, 0.95, key="s1_sl")
     
-    col1e, col1f, col1g, col1h, col1i = st.columns(5)
-    s1_cost = col1e.number_input("Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s1_cost")
-    s1_q = col1f.number_input("Order Qty (Q)", min_value=1, value=500, step=50, key="s1_q")
+    st.markdown("#### Costs & Reorder Logic")
+    col1e, col1f, col1g, col1h = st.columns(4)
+    s1_cost = col1e.number_input("Warehouse Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s1_cost")
+    s1_pipeline_cost = col1f.number_input("Pipeline Unit Cost ($)", min_value=0.01, value=40.0, step=5.0, key="s1_pipe_cost")
+    s1_q = col1g.number_input("Order Qty (Q)", min_value=1, value=500, step=50, key="s1_q")
     rec_s1_rop, _ = get_recommendations(s1_demand, s1_std_dev, s1_lead_time, s1_service_level)
-    s1_actual_rop = col1g.number_input("Actual ROP", min_value=0, value=int(rec_s1_rop), step=10, key="s1_act")
-    col1g.caption(f"💡 Suggested: **{rec_s1_rop:,.0f}**")
-    s1_allow_partial = col1h.checkbox("Allow Partial", value=True, key="s1_partial", help="Ship available inventory even if it doesn't cover the full order.")
-    s1_track_backlogs = col1i.checkbox("Track Backlogs", value=True, key="s1_backlog", help="Unmet demand goes into a backlog queue instead of being permanently lost.")
+    s1_actual_rop = col1h.number_input("Actual ROP", min_value=0, value=int(rec_s1_rop), step=10, key="s1_act")
+    col1h.caption(f"💡 Suggested: **{rec_s1_rop:,.0f}**")
+    
+    st.markdown("#### Fulfillment Rules")
+    s1_col1, s1_col2 = st.columns(2)
+    s1_allow_partial = s1_col1.checkbox("Allow Partial", value=True, key="s1_partial", help="Ship available inventory even if it doesn't cover the full order.")
+    s1_track_backlogs = s1_col2.checkbox("Track Backlogs", value=True, key="s1_backlog", help="Unmet demand goes into a backlog queue instead of being permanently lost.")
     
     st.markdown("---")
     df_s1, vol_fr_1, csl_1 = simulate_single_stage_detailed(s1_demand, s1_std_dev, s1_actual_rop, s1_q, s1_lead_time, sim_days, warmup_days, s1_allow_partial, s1_track_backlogs)
 
-    # Exact simulation averages & peaks
+    # Exact simulation averages & peaks (Updated with separate pipeline cost)
     s1_avg_oh = df_s1['Closing Balance'].mean()
     s1_avg_pipe = df_s1['Pipeline Inventory'].mean()
-    s1_sim_wc = (s1_avg_oh + s1_avg_pipe) * s1_cost
+    s1_sim_wc = (s1_avg_oh * s1_cost) + (s1_avg_pipe * s1_pipeline_cost)
     
-    s1_daily_wc = (df_s1['Closing Balance'] + df_s1['Pipeline Inventory']) * s1_cost
+    s1_daily_wc = (df_s1['Closing Balance'] * s1_cost) + (df_s1['Pipeline Inventory'] * s1_pipeline_cost)
     s1_peak_wc = s1_daily_wc.max()
     
     tot_sales_1 = df_s1['Sales'].sum()
@@ -282,7 +287,7 @@ with tab1:
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Simulated Avg WC", f"${s1_sim_wc:,.2f}")
     m2.metric("Peak Working Capital", f"${s1_peak_wc:,.2f}")
-    m3.metric("Volume Fill Rate (Item)", f"{vol_fr_1*100:.1f}%")
+    m3.metric("Volume Fill Rate", f"{vol_fr_1*100:.1f}%")
     m4.metric("Cycle Service Level", f"{csl_1*100:.1f}%")
     m5.metric("Total Sales (Units)", f"{tot_sales_1:,.0f}")
     
@@ -294,9 +299,9 @@ with tab1:
     
     val_data_1a = {
         "Asset Location / State": ["Central Warehouse (On-Hand)", "Pipeline (Supplier → Central)"],
-        "Unit Cost": [f"${s1_cost:,.2f}", f"${s1_cost:,.2f}"],
+        "Unit Cost": [f"${s1_cost:,.2f}", f"${s1_pipeline_cost:,.2f}"],
         "Average Units": [f"{s1_avg_oh:,.0f}", f"{s1_avg_pipe:,.0f}"],
-        "Average Value": [f"${s1_avg_oh * s1_cost:,.2f}", f"${s1_avg_pipe * s1_cost:,.2f}"]
+        "Average Value": [f"${s1_avg_oh * s1_cost:,.2f}", f"${s1_avg_pipe * s1_pipeline_cost:,.2f}"]
     }
     
     val_data_1b = {
