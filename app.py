@@ -13,6 +13,12 @@ def get_recommendations(demand, std_dev, lead_time, service_level):
     rop = max(0, (demand * lead_time) + safety_stock)
     return rop, safety_stock
 
+def get_financials(actual_rop, demand, lead_time, order_qty, unit_cost):
+    actual_ss = max(0, actual_rop - (demand * lead_time))
+    avg_working_capital = ((order_qty / 2) + actual_ss) * unit_cost
+    max_working_capital = (order_qty + actual_ss) * unit_cost
+    return actual_ss, avg_working_capital, max_working_capital
+
 # --- Scenario 1: Single Warehouse Detailed Simulation ---
 def simulate_single_stage_detailed(demand_mean, std_dev, rop, q, lead_time, days, warmup, allow_partial, track_backlogs):
     total_days = warmup + days
@@ -279,6 +285,30 @@ with tab1:
     plot_df1 = pd.DataFrame({'Day': df_s1['Day'], 'On-Hand Inventory': df_s1['Closing Balance'], 'Pipeline Inventory': df_s1['Pipeline Inventory'], 'Backlogged Orders': df_s1['Backlogs'], 'ROP Limit': s1_actual_rop})
     render_interactive_chart(plot_df1, ['On-Hand Inventory', 'Pipeline Inventory', 'Backlogged Orders', 'ROP Limit'])
     
+    # Financial Valuation Tables for Tab 1
+    st.markdown("### 💰 Average Inventory & Valuation Summary")
+    
+    val_data_1a = {
+        "Asset Location / State": ["Central Warehouse (On-Hand)", "Pipeline (Supplier → Central)"],
+        "Unit Cost": [f"${s1_cost:,.2f}", f"${s1_cost:,.2f}"],
+        "Average Units": [f"{s1_avg_oh:,.0f}", f"{s1_avg_pipe:,.0f}"],
+        "Average Value": [f"${s1_avg_oh * s1_cost:,.2f}", f"${s1_avg_pipe * s1_cost:,.2f}"]
+    }
+    
+    val_data_1b = {
+        "Ownership Entity": ["Central Facility (Total System)"],
+        "Average Total Units": [f"{s1_avg_oh + s1_avg_pipe:,.0f}"],
+        "Average Total Value": [f"${s1_sim_wc:,.2f}"]
+    }
+    
+    tcol1_1, tcol1_2 = st.columns(2)
+    with tcol1_1:
+        st.markdown("**Detailed Location Valuation**")
+        st.table(pd.DataFrame(val_data_1a).set_index("Asset Location / State"))
+    with tcol1_2:
+        st.markdown("**Ownership Valuation**")
+        st.table(pd.DataFrame(val_data_1b).set_index("Ownership Entity"))
+    
     with st.expander("📋 View Daily Data Table"): st.dataframe(df_s1, use_container_width=True)
 
 # --- TAB 2: TWO-STAGE (LOCAL ROP) ---
@@ -342,7 +372,6 @@ with tab2:
     
     st.markdown("### 💰 Average Inventory & Valuation Summary")
     
-    # Table 1: Itemized breakdown
     val_data_1 = {
         "Asset Location / State": ["Secondary Warehouse (On-Hand)", "Pipeline (Main → Secondary)", "Main Warehouse (On-Hand)", "Pipeline (Supplier → Main)"],
         "Unit Cost": [f"${s2_sec_cost:,.2f}", f"${s2_sec_cost:,.2f}", f"${s2_main_cost:,.2f}", f"${s2_main_cost:,.2f}"],
@@ -350,7 +379,6 @@ with tab2:
         "Average Value": [f"${avg_sec_oh_2 * s2_sec_cost:,.2f}", f"${avg_sec_pipe_2 * s2_sec_cost:,.2f}", f"${avg_main_oh_2 * s2_main_cost:,.2f}", f"${avg_main_pipe_2 * s2_main_cost:,.2f}"]
     }
     
-    # Table 2: Ownership breakdown
     val_data_2 = {
         "Ownership Entity": ["Secondary (Includes Main→Sec Pipeline)", "Main (Includes Sup→Main Pipeline)"],
         "Average Total Units": [f"{avg_sec_oh_2 + avg_sec_pipe_2:,.0f}", f"{avg_main_oh_2 + avg_main_pipe_2:,.0f}"],
@@ -433,7 +461,6 @@ with tab3:
     
     st.markdown("### 💰 Average Inventory & Valuation Summary")
     
-    # Table 1: Itemized breakdown
     val_data_3a = {
         "Asset Location / State": ["Secondary Warehouse (On-Hand)", "Pipeline (Main → Secondary)", "Main Warehouse (On-Hand)", "Pipeline (Supplier → Main)"],
         "Unit Cost": [f"${s3_sec_cost:,.2f}", f"${s3_sec_cost:,.2f}", f"${s3_main_cost:,.2f}", f"${s3_main_cost:,.2f}"],
@@ -441,7 +468,6 @@ with tab3:
         "Average Value": [f"${avg_sec_oh_3 * s3_sec_cost:,.2f}", f"${avg_sec_pipe_3 * s3_sec_cost:,.2f}", f"${avg_main_oh_3 * s3_main_cost:,.2f}", f"${avg_main_pipe_3 * s3_main_cost:,.2f}"]
     }
     
-    # Table 2: Ownership breakdown
     val_data_3b = {
         "Ownership Entity": ["Secondary (Includes Main→Sec Pipeline)", "Main (Includes Sup→Main Pipeline)"],
         "Average Total Units": [f"{avg_sec_oh_3 + avg_sec_pipe_3:,.0f}", f"{avg_main_oh_3 + avg_main_pipe_3:,.0f}"],
