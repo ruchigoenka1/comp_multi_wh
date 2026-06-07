@@ -1,9 +1,9 @@
 import streamlit as st
 import numpy as np
 from scipy.stats import norm
+import math
 import pandas as pd
 import plotly.graph_objects as go
-import math
 
 # --- Core Financial Calculations ---
 def get_recommendations(demand, std_dev, lead_time, service_level):
@@ -108,6 +108,9 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
     main_delay_days = 0
 
     for t in range(total_days):
+        ship_old = 0
+        ship_now = 0
+        
         # 1. MAIN WAREHOUSE (HUB)
         main_opening = main_inv
         m_arr = main_arrivals[t]
@@ -117,14 +120,14 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
         # Ship old backlogs to Sec
         if main_track_backlogs and main_backlog_to_sec > 0 and main_inv > 0:
             if main_allow_partial:
-                ship = min(main_backlog_to_sec, main_inv)
+                ship_old = min(main_backlog_to_sec, main_inv)
             else:
-                ship = main_backlog_to_sec if main_inv >= main_backlog_to_sec else 0
+                ship_old = main_backlog_to_sec if main_inv >= main_backlog_to_sec else 0
                 
-            main_inv -= ship
-            main_backlog_to_sec -= ship
-            sec_arrivals[t + int(sec_lt)] += ship
-            sec_pipe_qty += ship
+            main_inv -= ship_old
+            main_backlog_to_sec -= ship_old
+            sec_arrivals[t + int(sec_lt)] += ship_old
+            sec_pipe_qty += ship_old
         elif not main_track_backlogs:
             main_backlog_to_sec = 0
 
@@ -203,8 +206,15 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
             main_pipe_qty += main_q
             
         if t >= warmup:
+            # Secondary Row
             sec_rows.append([t-warmup+1, sec_opening, s_arr, sec_opening+s_arr, dem, sales, shortage, sec_backlog, sec_inv, sec_order_given, shortage_from_supplier, sec_pipe_qty])
-            main_rows.append([t-warmup+1, main_opening, m_arr, main_opening+m_arr, 0, 0, 0, main_backlog_to_sec, main_inv, main_order_given, 0, main_pipe_qty])
+            
+            # Main Row tracking
+            main_demand_today = sec_order_given
+            main_sales_today = ship_old + ship_now
+            main_shortage_today = shortage_from_supplier
+            
+            main_rows.append([t-warmup+1, main_opening, m_arr, main_opening+m_arr, main_demand_today, main_sales_today, main_shortage_today, main_backlog_to_sec, main_inv, main_order_given, 0, main_pipe_qty])
 
     cols = ["Day", "Opening Balance", "Order Received", "Available Inv", "Demand", "Sales", "Shortage", "Backlogs", "Closing Balance", "Orders Given", "Shortages from Supplier", "Pipeline Inventory"]
     
@@ -408,3 +418,19 @@ with tab3:
         with st.expander("📋 View Secondary Warehouse Data"): st.dataframe(df_sec_s3, use_container_width=True)
     with col_t4:
         with st.expander("📋 View Main Warehouse Data"): st.dataframe(df_main_s3, use_container_width=True)
+
+# ==========================================
+# MASTER COMPARISON TABLE
+# ==========================================
+st.markdown("---")
+st.header("📋 Master Comparison Summary")
+
+comparison_data = {
+    "Metric": ["Target Fill Rate", "Order Qty (Q)", "Suggested ROP", "Actual Set ROP", "Avg Working Capital", "Stockout Days"],
+    "S1: Central": [f"{s1_service_level*100:.1f}%", f"{s1_q:,.0f}", f"{rec_s1_rop:,.0f}", f"{s1_actual_rop:,.0f}", f"${s1_avg_wc:,.0f}", "N/A"],
+    "S2: Secondary": [f"{s2_sec_sl*100:.1f}%", f"{s2_sec_q:,.0f}", f"{rec_sec_rop:,.0f}", f"{s2_sec_actual_rop:,.0f}", f"${s2_sec_avg_wc:,.0f}", "—"],
+    "S2: Main": [f"{s2_main_sl*100:.1f}%", f"{s2_main_q:,.0f}", f"{rec_main_rop:,.0f}", f"{s2_main_actual_rop:,.0f}", f"${s2_main_avg_wc:,.0f}", f"{delay_2}"],
+    "S3: Secondary": [f"{s3_sec_sl*100:.1f}%", f"{s3_sec_q:,.0f}", f"{rec_s3_sec_rop:,.0f}", f"{s3_sec_actual_rop:,.0f}", f"${s3_sec_avg_wc:,.0f}", "—"],
+    "S3: Main (Echelon)": [f"{s3_main_sl*100:.1f}%", f"{s3_main_q:,.0f}", f"{rec_echelon_rop:,.0f}", f"{s3_echelon_actual_rop:,.0f}", f"${s3_main_avg_wc:,.0f}", f"{delay_3}"]
+}
+st.table(pd.DataFrame(comparison_data).set_index("Metric"))
