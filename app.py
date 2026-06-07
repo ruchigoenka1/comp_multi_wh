@@ -19,14 +19,13 @@ def get_financials(actual_rop, demand, lead_time, order_qty, unit_cost):
     max_working_capital = (order_qty + actual_ss) * unit_cost
     return actual_ss, avg_working_capital, max_working_capital
 
-# --- Scenario 1: Single Warehouse (Vectorized Monte Carlo) ---
+# --- Scenario 1: Single Warehouse ---
 def simulate_single_stage(demand_mean, std_dev, rop, ss, q, lead_time, days, warmup, allow_partial, track_backlogs):
     total_days = warmup + days
     lt = int(lead_time)
     
     demands = np.maximum(0, np.random.normal(demand_mean, std_dev, total_days))
     
-    # Pre-allocate State Arrays
     hist_phys_inv = np.zeros(total_days)
     hist_pipeline = np.zeros(total_days)
     hist_backlog = np.zeros(total_days)
@@ -44,7 +43,6 @@ def simulate_single_stage(demand_mean, std_dev, rop, ss, q, lead_time, days, war
         # 1. Process Arrivals
         arr = arrivals[t]
         
-        # Fulfill existing backlogs first
         if track_backlogs and backlog > 0:
             fill_amount = min(arr, backlog)
             backlog -= fill_amount
@@ -74,7 +72,6 @@ def simulate_single_stage(demand_mean, std_dev, rop, ss, q, lead_time, days, war
                 unmet = dem
                 if track_backlogs: backlog += unmet
 
-        # 3. Track Metrics (Post-Warmup)
         if t >= warmup:
             total_demand_sim += dem
             total_filled_sim += filled
@@ -103,7 +100,7 @@ def simulate_single_stage(demand_mean, std_dev, rop, ss, q, lead_time, days, war
     csl = 1 - (stockout_days / days)
     return df, vol_fill_rate, csl
 
-# --- Scenario 2 & 3: Two-Stage (Vectorized Monte Carlo) ---
+# --- Scenario 2 & 3: Two-Stage ---
 def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, main_q, main_lt, days, warmup, allow_partial, track_backlogs, strategy="installation"):
     total_days = warmup + days
     s_lt = int(sec_lt)
@@ -116,6 +113,7 @@ def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, ma
     hist_sec_pipe = np.zeros(total_days)
     hist_main_pipe = np.zeros(total_days)
     hist_sec_backlog = np.zeros(total_days)
+    hist_main_backlog = np.zeros(total_days) # Tracks Main -> Sec delays
     hist_blame = np.zeros(total_days, dtype=bool)
     
     main_inv = main_rop + main_q
@@ -138,12 +136,13 @@ def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, ma
         main_inv += main_arrivals[t]
         main_pipe_qty -= main_arrivals[t]
 
-        # 2. Main fulfills Backlogs to Secondary
-        while main_backlog_to_sec >= sec_q and main_inv >= sec_q:
-            main_inv -= sec_q
-            main_backlog_to_sec -= sec_q
-            sec_arrivals[t + s_lt] += sec_q
-            sec_pipe_qty += sec_q
+        # 2. Main fulfills internal backlogs to Secondary (Partial shipments enabled)
+        if main_backlog_to_sec > 0 and main_inv > 0:
+            ship_qty = min(main_backlog_to_sec, main_inv)
+            main_inv -= ship_qty
+            main_backlog_to_sec -= ship_qty
+            sec_arrivals[t + s_lt] += ship_qty
+            sec_pipe_qty += ship_qty
 
         # 3. Secondary receives
         arr = sec_arrivals[t]
@@ -182,17 +181,27 @@ def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, ma
             total_filled_sim += filled
             if filled < dem: sec_stockout_days += 1
 
-        # 5. Secondary Orders
+        # 5. Secondary Orders from Main (Partial shipments enabled)
         sec_pos = sec_inv + sec_pipe_qty + main_backlog_to_sec - sec_backlog
         if sec_pos <= sec_rop:
             if main_inv >= sec_q:
+                # Fully shipped
                 main_inv -= sec_q
                 sec_arrivals[t + s_lt] += sec_q
                 sec_pipe_qty += sec_q
             else:
-                main_backlog_to_sec += sec_q 
+                # Partially shipped from Main -> Sec
+                ship_qty = main_inv
+                unmet_req = sec_q - ship_qty
+                
+                if ship_qty > 0:
+                    main_inv -= ship_qty
+                    sec_arrivals[t + s_lt] += ship_qty
+                    sec_pipe_qty += ship_qty
+                    
+                main_backlog_to_sec += unmet_req
 
-        # 6. Main Orders
+        # 6. Main Orders from Supplier
         if strategy == "installation":
             main_trigger_pos = main_inv + main_pipe_qty - main_backlog_to_sec
         elif strategy == "echelon":
@@ -208,6 +217,7 @@ def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, ma
         hist_sec_pipe[t] = sec_pipe_qty
         hist_main_pipe[t] = main_pipe_qty
         hist_sec_backlog[t] = sec_backlog
+        hist_main_backlog[t] = main_backlog_to_sec
         hist_blame[t] = delayed_by_main
 
     df = pd.DataFrame({
@@ -218,6 +228,7 @@ def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, ma
         'Sec Backlogged': hist_sec_backlog[warmup:],
         'Main On-Hand': hist_main_inv[warmup:],
         'Main Pipeline': hist_main_pipe[warmup:],
+        'Main Backlog (to Sec)': hist_main_backlog[warmup:],
         'Stockout_Blamed_On_Main': hist_blame[warmup:]
     })
         
@@ -229,11 +240,10 @@ def simulate_two_stage(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, ma
 def render_interactive_chart(df, y_cols):
     fig = go.Figure()
     
-    # Predefined color mapping for consistency
     color_map = {
         'On-Hand Inventory': '#1f77b4',
         'Pipeline Inventory': '#9467bd',
-        'Backlogged Orders': '#d62728', # Red for warnings
+        'Backlogged Orders': '#d62728',
         'ROP Limit': '#ff7f0e',
         'Sec On-Hand': '#1f77b4',
         'Sec Pipeline': '#aec7e8',
@@ -277,8 +287,8 @@ st.markdown("Adjust parameters below to dictate fulfillment rules and simulation
 col_g1, col_g2, col_g3, col_g4 = st.columns(4)
 warmup_days = col_g1.number_input("Warm-up Period", min_value=0, value=150, step=30)
 sim_days = col_g2.number_input("Display Period", min_value=10, value=300, step=30)
-allow_partial = col_g3.checkbox("Allow Partial Fulfillment", value=True, help="If checked, ships available inventory even if it doesn't cover the full order.")
-allow_backlogs = col_g4.checkbox("Track Backlogs", value=True, help="If checked, unmet demand goes into a backlog queue. If unchecked, unmet demand is permanently lost (Lost Sales).")
+allow_partial = col_g3.checkbox("Allow Partial Fulfillment", value=True, help="Ships available inventory even if it doesn't cover the full order.")
+allow_backlogs = col_g4.checkbox("Track Backlogs", value=True, help="Unmet demand goes into a backlog queue instead of being permanently lost.")
 st.markdown("---")
 
 tab1, tab2, tab3 = st.tabs(["🏢 Scenario 1: Single Central", "🏬 Scenario 2: Two-Stage (Local ROP)", "🌍 Scenario 3: Multi-Echelon"])
@@ -306,8 +316,8 @@ with tab1:
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Avg Working Capital", f"${s1_avg_wc:,.2f}")
     m2.metric("Realized Safety Stock", f"{s1_act_ss:,.0f} units")
-    m3.metric("Volume Fill Rate (Item)", f"{vol_fr_1*100:.1f}%", help="Percentage of total physical units demanded that were successfully fulfilled.")
-    m4.metric("Cycle Service Level", f"{csl_1*100:.1f}%", help="Percentage of days with zero stockouts or backlogs.")
+    m3.metric("Volume Fill Rate (Item)", f"{vol_fr_1*100:.1f}%")
+    m4.metric("Cycle Service Level", f"{csl_1*100:.1f}%")
     
     render_interactive_chart(df_s1, ['On-Hand Inventory', 'Pipeline Inventory', 'Backlogged Orders', 'ROP Limit'])
     with st.expander("📋 View Daily Data Table"): st.dataframe(df_s1, use_container_width=True)
@@ -354,7 +364,15 @@ with tab2:
     sm4.metric("Main Delay Stockouts", f"{df_s2['Stockout_Blamed_On_Main'].sum()} Days")
 
     render_interactive_chart(df_s2, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
-    with st.expander("📋 View Daily Data Table"): st.dataframe(df_s2, use_container_width=True)
+    
+    # Split Data Tables
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        with st.expander("📋 View Secondary Warehouse Data"):
+            st.dataframe(df_s2[['Day', 'Daily Demand', 'Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged']], use_container_width=True)
+    with col_t2:
+        with st.expander("📋 View Main Warehouse Data"):
+            st.dataframe(df_s2[['Day', 'Main On-Hand', 'Main Pipeline', 'Main Backlog (to Sec)']], use_container_width=True)
 
 # --- TAB 3: ECHELON SYSTEM ---
 with tab3:
@@ -399,4 +417,28 @@ with tab3:
     tm4.metric("Main Delay Stockouts", f"{df_s3['Stockout_Blamed_On_Main'].sum()} Days")
 
     render_interactive_chart(df_s3, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
-    with st.expander("📋 View Daily Data Table"): st.dataframe(df_s3, use_container_width=True)
+    
+    # Split Data Tables
+    col_t3, col_t4 = st.columns(2)
+    with col_t3:
+        with st.expander("📋 View Secondary Warehouse Data"):
+            st.dataframe(df_s3[['Day', 'Daily Demand', 'Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged']], use_container_width=True)
+    with col_t4:
+        with st.expander("📋 View Main Warehouse Data"):
+            st.dataframe(df_s3[['Day', 'Main On-Hand', 'Main Pipeline', 'Main Backlog (to Sec)']], use_container_width=True)
+
+# ==========================================
+# MASTER COMPARISON TABLE
+# ==========================================
+st.markdown("---")
+st.header("📋 Master Comparison Summary")
+
+comparison_data = {
+    "Metric": ["Target Fill Rate", "Order Qty (Q)", "Suggested ROP", "Actual Set ROP", "Avg Working Capital", "Stockout Days"],
+    "S1: Central": [f"{s1_service_level*100:.1f}%", f"{s1_q:,.0f}", f"{rec_s1_rop:,.0f}", f"{s1_actual_rop:,.0f}", f"${s1_avg_wc:,.0f}", "N/A"],
+    "S2: Secondary": [f"{s2_sec_sl*100:.1f}%", f"{s2_sec_q:,.0f}", f"{rec_sec_rop:,.0f}", f"{s2_sec_actual_rop:,.0f}", f"${s2_sec_avg_wc:,.0f}", "—"],
+    "S2: Main": [f"{s2_main_sl*100:.1f}%", f"{s2_main_q:,.0f}", f"{rec_main_rop:,.0f}", f"{s2_main_actual_rop:,.0f}", f"${s2_main_avg_wc:,.0f}", f"{df_s2['Stockout_Blamed_On_Main'].sum()}"],
+    "S3: Secondary": [f"{s3_sec_sl*100:.1f}%", f"{s3_sec_q:,.0f}", f"{rec_s3_sec_rop:,.0f}", f"{s3_sec_actual_rop:,.0f}", f"${s3_sec_avg_wc:,.0f}", "—"],
+    "S3: Main (Echelon)": [f"{s3_main_sl*100:.1f}%", f"{s3_main_q:,.0f}", f"{rec_echelon_rop:,.0f}", f"{s3_echelon_actual_rop:,.0f}", f"${s3_main_avg_wc:,.0f}", f"{df_s3['Stockout_Blamed_On_Main'].sum()}"]
+}
+st.table(pd.DataFrame(comparison_data).set_index("Metric"))
