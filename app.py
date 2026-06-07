@@ -3,7 +3,6 @@ import numpy as np
 from scipy.stats import norm
 import pandas as pd
 import plotly.graph_objects as go
-import math
 
 # --- Core Financial Calculations ---
 def get_recommendations(demand, std_dev, lead_time, service_level):
@@ -41,15 +40,20 @@ def simulate_single_stage_detailed(demand_mean, std_dev, rop, q, lead_time, days
         
         # Fulfill old backlogs
         if track_backlogs and backlog > 0:
-            fill_old = min(arr, backlog)
+            if allow_partial:
+                fill_old = min(arr, backlog)
+            else:
+                fill_old = backlog if arr >= backlog else 0
             backlog -= fill_old
             arr_for_today = arr - fill_old
         else:
             arr_for_today = arr
+            if not track_backlogs: backlog = 0
             
         avail = inv + arr_for_today
         dem = demands[t]
         
+        # Fulfill new demand
         if allow_partial:
             sales = min(avail, dem)
             shortage = dem - sales
@@ -86,7 +90,7 @@ def simulate_single_stage_detailed(demand_mean, std_dev, rop, q, lead_time, days
     return pd.DataFrame(rows, columns=cols), vol_fr, csl
 
 # --- Scenario 2 & 3: Two-Stage Detailed Simulation ---
-def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, main_q, main_lt, days, warmup, allow_partial, track_backlogs, strategy="installation"):
+def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, main_rop, main_q, main_lt, days, warmup, sec_allow_partial, sec_track_backlogs, main_allow_partial, main_track_backlogs, strategy="installation"):
     total_days = warmup + days
     sec_demands = np.maximum(0, np.random.normal(sec_demand, sec_std, total_days))
     
@@ -109,34 +113,46 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
         main_inv += m_arr
         main_pipe_qty -= m_arr
         
-        # Ship partial backlogs to Sec
-        if main_backlog_to_sec > 0 and main_inv > 0:
-            ship = min(main_backlog_to_sec, main_inv)
+        # Ship old backlogs to Sec
+        if main_track_backlogs and main_backlog_to_sec > 0 and main_inv > 0:
+            if main_allow_partial:
+                ship = min(main_backlog_to_sec, main_inv)
+            else:
+                ship = main_backlog_to_sec if main_inv >= main_backlog_to_sec else 0
+                
             main_inv -= ship
             main_backlog_to_sec -= ship
             sec_arrivals[t + int(sec_lt)] += ship
             sec_pipe_qty += ship
+        elif not main_track_backlogs:
+            main_backlog_to_sec = 0
 
         # 2. SECONDARY WAREHOUSE (FRONT-LINE)
         sec_opening = sec_inv
         s_arr = sec_arrivals[t]
         sec_pipe_qty -= s_arr
         
-        if track_backlogs and sec_backlog > 0:
-            fill_old = min(s_arr, sec_backlog)
+        # Fulfill old customer backlogs
+        if sec_track_backlogs and sec_backlog > 0:
+            if sec_allow_partial:
+                fill_old = min(s_arr, sec_backlog)
+            else:
+                fill_old = sec_backlog if s_arr >= sec_backlog else 0
             sec_backlog -= fill_old
             s_arr_for_today = s_arr - fill_old
         else:
             s_arr_for_today = s_arr
+            if not sec_track_backlogs: sec_backlog = 0
             
         avail = sec_inv + s_arr_for_today
         dem = sec_demands[t]
         
-        if allow_partial:
+        # Fulfill new customer demand
+        if sec_allow_partial:
             sales = min(avail, dem)
             shortage = dem - sales
             sec_inv = avail - sales
-            if track_backlogs: sec_backlog += shortage
+            if sec_track_backlogs: sec_backlog += shortage
         else:
             if avail >= dem:
                 sales = dem
@@ -146,7 +162,7 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
                 sales = 0
                 shortage = dem
                 sec_inv = avail
-                if track_backlogs: sec_backlog += shortage
+                if sec_track_backlogs: sec_backlog += shortage
                 
         delayed_by_main = (sec_inv == 0) and (main_backlog_to_sec > 0) and (sales < dem)
 
@@ -163,10 +179,17 @@ def simulate_two_stage_detailed(sec_demand, sec_std, sec_rop, sec_q, sec_lt, mai
         
         if sec_pos <= sec_rop:
             sec_order_given = sec_q
-            ship_now = min(main_inv, sec_q)
+            if main_allow_partial:
+                ship_now = min(main_inv, sec_q)
+            else:
+                ship_now = sec_q if main_inv >= sec_q else 0
+                
             main_inv -= ship_now
             shortage_from_supplier = sec_q - ship_now
-            main_backlog_to_sec += shortage_from_supplier
+            
+            if main_track_backlogs:
+                main_backlog_to_sec += shortage_from_supplier
+                
             sec_arrivals[t + int(sec_lt)] += ship_now
             sec_pipe_qty += ship_now
 
@@ -225,11 +248,9 @@ st.title("📦 Supply Chain Scenario Architect")
 # GLOBAL SETTINGS
 # ==========================================
 st.markdown("### ⚙️ Global Simulation Settings")
-col_g1, col_g2, col_g3, col_g4 = st.columns(4)
+col_g1, col_g2 = st.columns(2)
 warmup_days = col_g1.number_input("Warm-up Period", min_value=0, value=150, step=30)
 sim_days = col_g2.number_input("Display Period", min_value=10, value=300, step=30)
-allow_partial = col_g3.checkbox("Allow Partial Fulfillment", value=True, help="Ships available inventory even if it doesn't cover the full order.")
-allow_backlogs = col_g4.checkbox("Track Backlogs", value=True, help="Unmet demand goes into a backlog queue instead of being permanently lost.")
 st.markdown("---")
 
 tab1, tab2, tab3 = st.tabs(["🏢 Scenario 1: Single Central", "🏬 Scenario 2: Two-Stage (Local ROP)", "🌍 Scenario 3: Multi-Echelon"])
@@ -250,9 +271,14 @@ with tab1:
     s1_actual_rop = col1g.number_input("Actual ROP", min_value=0, value=int(rec_s1_rop), step=10, key="s1_act")
     col1g.caption(f"💡 Suggested: **{rec_s1_rop:,.0f}**")
     
+    st.markdown("#### Fulfillment Rules")
+    s1_col1, s1_col2 = st.columns(2)
+    s1_allow_partial = s1_col1.checkbox("Allow Partial Fulfillment", value=True, key="s1_partial")
+    s1_track_backlogs = s1_col2.checkbox("Track Backlogs", value=True, key="s1_backlog")
+    
     st.markdown("---")
     s1_act_ss, s1_avg_wc, _ = get_financials(s1_actual_rop, s1_demand, s1_lead_time, s1_q, s1_cost)
-    df_s1, vol_fr_1, csl_1 = simulate_single_stage_detailed(s1_demand, s1_std_dev, s1_actual_rop, s1_q, s1_lead_time, sim_days, warmup_days, allow_partial, allow_backlogs)
+    df_s1, vol_fr_1, csl_1 = simulate_single_stage_detailed(s1_demand, s1_std_dev, s1_actual_rop, s1_q, s1_lead_time, sim_days, warmup_days, s1_allow_partial, s1_track_backlogs)
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Avg Working Capital", f"${s1_avg_wc:,.2f}")
@@ -276,12 +302,16 @@ with tab2:
     s2_sec_lt = c2c.number_input("Transit LT", min_value=0.0, value=3.0, step=1.0, key="s2_sec_lt")
     s2_sec_sl = c2d.slider("Sec Target Fill Rate", 0.50, 0.999, 0.95, key="s2_sec_sl")
     
-    c2e, c2f = st.columns(2)
+    c2e, c2f, c2g, c2h = st.columns(4)
     s2_sec_q = c2e.number_input("Sec Order Qty", min_value=1, value=300, step=50, key="s2_sec_q")
     rec_sec_rop, _ = get_recommendations(s2_sec_demand, s2_sec_std, s2_sec_lt, s2_sec_sl)
     s2_sec_actual_rop = c2f.number_input("Sec Actual ROP", min_value=0, value=int(rec_sec_rop), step=10, key="s2_sec_act")
     c2f.caption(f"💡 Suggested: **{rec_sec_rop:,.0f}**")
-    _, s2_sec_avg_wc, _ = get_financials(s2_sec_actual_rop, s2_sec_demand, s2_sec_lt, s2_sec_q, s2_cost)
+    
+    s2_sec_allow_partial = c2g.checkbox("Allow Partial", value=True, key="s2_sec_partial", help="Secondary fulfilling customers")
+    s2_sec_track_backlogs = c2h.checkbox("Track Backlogs", value=True, key="s2_sec_backlog", help="Secondary tracking customer backlogs")
+    
+    s2_sec_act_ss, s2_sec_avg_wc, _ = get_financials(s2_sec_actual_rop, s2_sec_demand, s2_sec_lt, s2_sec_q, s2_cost)
     
     st.markdown("#### Main (Hub)")
     c3a, c3b, c3c, c3d = st.columns(4)
@@ -290,15 +320,19 @@ with tab2:
     s2_main_lt = c3c.number_input("Supplier LT", min_value=0.0, value=10.0, step=1.0, key="s2_main_lt")
     s2_main_sl = c3d.slider("Main Target Fill Rate", 0.50, 0.999, 0.98, key="s2_main_sl")
     
-    c3e, c3f = st.columns(2)
+    c3e, c3f, c3g, c3h = st.columns(4)
     s2_main_q = c3e.number_input("Main Order Qty", min_value=1, value=800, step=50, key="s2_main_q")
     rec_main_rop, _ = get_recommendations(s2_main_demand, s2_main_std, s2_main_lt, s2_main_sl)
     s2_main_actual_rop = c3f.number_input("Main Actual ROP", min_value=0, value=int(rec_main_rop), step=10, key="s2_main_act")
     c3f.caption(f"💡 Suggested: **{rec_main_rop:,.0f}**")
+    
+    s2_main_allow_partial = c3g.checkbox("Allow Partial", value=True, key="s2_main_partial", help="Main fulfilling Secondary")
+    s2_main_track_backlogs = c3h.checkbox("Track Backlogs", value=True, key="s2_main_backlog", help="Main tracking Secondary backlogs")
+    
     _, s2_main_avg_wc, _ = get_financials(s2_main_actual_rop, s2_main_demand, s2_main_lt, s2_main_q, s2_cost)
 
     st.markdown("---")
-    df_sec_s2, df_main_s2, vol_fr_2, csl_2, delay_2 = simulate_two_stage_detailed(s2_sec_demand, s2_sec_std, s2_sec_actual_rop, s2_sec_q, s2_sec_lt, s2_main_actual_rop, s2_main_q, s2_main_lt, sim_days, warmup_days, allow_partial, allow_backlogs, "installation")
+    df_sec_s2, df_main_s2, vol_fr_2, csl_2, delay_2 = simulate_two_stage_detailed(s2_sec_demand, s2_sec_std, s2_sec_actual_rop, s2_sec_q, s2_sec_lt, s2_main_actual_rop, s2_main_q, s2_main_lt, sim_days, warmup_days, s2_sec_allow_partial, s2_sec_track_backlogs, s2_main_allow_partial, s2_main_track_backlogs, "installation")
     
     sm1, sm2, sm3, sm4 = st.columns(4)
     sm1.metric("System Avg WC", f"${(s2_sec_avg_wc + s2_main_avg_wc):,.2f}")
@@ -317,7 +351,7 @@ with tab2:
 
 # --- TAB 3: ECHELON SYSTEM ---
 with tab3:
-    s3_cost = st.number_input("Shared Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s3_cost")
+    s3_cost = st.number_input("Shared Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s3_cost_t3")
     
     st.markdown("#### Secondary (Front-line)")
     c4a, c4b, c4c, c4d = st.columns(4)
@@ -326,11 +360,15 @@ with tab3:
     s3_sec_lt = c4c.number_input("Transit LT", min_value=0.0, value=3.0, step=1.0, key="s3_sec_lt")
     s3_sec_sl = c4d.slider("Sec Target Fill Rate", 0.50, 0.999, 0.95, key="s3_sec_sl")
     
-    c4e, c4f = st.columns(2)
+    c4e, c4f, c4g, c4h = st.columns(4)
     s3_sec_q = c4e.number_input("Sec Order Qty", min_value=1, value=300, step=50, key="s3_sec_q")
     rec_s3_sec_rop, _ = get_recommendations(s3_sec_demand, s3_sec_std, s3_sec_lt, s3_sec_sl)
     s3_sec_actual_rop = c4f.number_input("Sec Actual ROP", min_value=0, value=int(rec_s3_sec_rop), step=10, key="s3_sec_act")
     c4f.caption(f"💡 Suggested: **{rec_s3_sec_rop:,.0f}**")
+    
+    s3_sec_allow_partial = c4g.checkbox("Allow Partial", value=True, key="s3_sec_partial")
+    s3_sec_track_backlogs = c4h.checkbox("Track Backlogs", value=True, key="s3_sec_backlog")
+    
     _, s3_sec_avg_wc, _ = get_financials(s3_sec_actual_rop, s3_sec_demand, s3_sec_lt, s3_sec_q, s3_cost)
     
     st.markdown("#### Main (Echelon Evaluator)")
@@ -340,16 +378,20 @@ with tab3:
     s3_main_lt = c5c.number_input("Supplier LT", min_value=0.0, value=10.0, step=1.0, key="s3_main_lt")
     s3_main_sl = c5d.slider("Main Target Fill Rate", 0.50, 0.999, 0.98, key="s3_main_sl")
     
-    c5e, c5f = st.columns(2)
+    c5e, c5f, c5g, c5h = st.columns(4)
     s3_main_q = c5e.number_input("Main Order Qty", min_value=1, value=800, step=50, key="s3_main_q")
     _, main_base_ss = get_recommendations(s3_main_demand, s3_main_std, s3_main_lt, s3_main_sl)
     rec_echelon_rop = rec_s3_sec_rop + (s3_main_demand * s3_main_lt) + main_base_ss
     s3_echelon_actual_rop = c5f.number_input("Echelon Actual ROP", min_value=0, value=int(rec_echelon_rop), step=10, key="s3_ech_act")
     c5f.caption(f"💡 Suggested: **{rec_echelon_rop:,.0f}**")
+    
+    s3_main_allow_partial = c5g.checkbox("Allow Partial", value=True, key="s3_main_partial")
+    s3_main_track_backlogs = c5h.checkbox("Track Backlogs", value=True, key="s3_main_backlog")
+    
     _, s3_main_avg_wc, _ = get_financials(s3_echelon_actual_rop - rec_s3_sec_rop, s3_main_demand, s3_main_lt, s3_main_q, s3_cost)
 
     st.markdown("---")
-    df_sec_s3, df_main_s3, vol_fr_3, csl_3, delay_3 = simulate_two_stage_detailed(s3_sec_demand, s3_sec_std, s3_sec_actual_rop, s3_sec_q, s3_sec_lt, s3_echelon_actual_rop, s3_main_q, s3_main_lt, sim_days, warmup_days, allow_partial, allow_backlogs, "echelon")
+    df_sec_s3, df_main_s3, vol_fr_3, csl_3, delay_3 = simulate_two_stage_detailed(s3_sec_demand, s3_sec_std, s3_sec_actual_rop, s3_sec_q, s3_sec_lt, s3_echelon_actual_rop, s3_main_q, s3_main_lt, sim_days, warmup_days, s3_sec_allow_partial, s3_sec_track_backlogs, s3_main_allow_partial, s3_main_track_backlogs, "echelon")
     
     tm1, tm2, tm3, tm4 = st.columns(4)
     tm1.metric("System Avg WC", f"${(s3_sec_avg_wc + s3_main_avg_wc):,.2f}")
@@ -365,19 +407,3 @@ with tab3:
         with st.expander("📋 View Secondary Warehouse Data"): st.dataframe(df_sec_s3, use_container_width=True)
     with col_t4:
         with st.expander("📋 View Main Warehouse Data"): st.dataframe(df_main_s3, use_container_width=True)
-
-# ==========================================
-# MASTER COMPARISON TABLE
-# ==========================================
-st.markdown("---")
-st.header("📋 Master Comparison Summary")
-
-comparison_data = {
-    "Metric": ["Target Fill Rate", "Order Qty (Q)", "Suggested ROP", "Actual Set ROP", "Avg Working Capital", "Stockout Days"],
-    "S1: Central": [f"{s1_service_level*100:.1f}%", f"{s1_q:,.0f}", f"{rec_s1_rop:,.0f}", f"{s1_actual_rop:,.0f}", f"${s1_avg_wc:,.0f}", "N/A"],
-    "S2: Secondary": [f"{s2_sec_sl*100:.1f}%", f"{s2_sec_q:,.0f}", f"{rec_sec_rop:,.0f}", f"{s2_sec_actual_rop:,.0f}", f"${s2_sec_avg_wc:,.0f}", "—"],
-    "S2: Main": [f"{s2_main_sl*100:.1f}%", f"{s2_main_q:,.0f}", f"{rec_main_rop:,.0f}", f"{s2_main_actual_rop:,.0f}", f"${s2_main_avg_wc:,.0f}", f"{delay_2}"],
-    "S3: Secondary": [f"{s3_sec_sl*100:.1f}%", f"{s3_sec_q:,.0f}", f"{rec_s3_sec_rop:,.0f}", f"{s3_sec_actual_rop:,.0f}", f"${s3_sec_avg_wc:,.0f}", "—"],
-    "S3: Main (Echelon)": [f"{s3_main_sl*100:.1f}%", f"{s3_main_q:,.0f}", f"{rec_echelon_rop:,.0f}", f"{s3_echelon_actual_rop:,.0f}", f"${s3_main_avg_wc:,.0f}", f"{delay_3}"]
-}
-st.table(pd.DataFrame(comparison_data).set_index("Metric"))
