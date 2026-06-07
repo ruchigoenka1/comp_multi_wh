@@ -3,6 +3,7 @@ import numpy as np
 from scipy.stats import norm
 import pandas as pd
 import plotly.graph_objects as go
+import math
 
 # --- Core Financial Calculations ---
 def get_recommendations(demand, std_dev, lead_time, service_level):
