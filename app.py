@@ -341,50 +341,62 @@ def render_aging_buckets_chart(df_snapshots, location_filter):
     if df_snapshots.empty: return
     df = df_snapshots.copy()
     
-    # Filter by specific location if it isn't "Overall System"
     if location_filter != "Overall System":
-        # Handle multiple locations (e.g., both On-Hand and Pipeline if needed, or specific single locations)
         df = df[df['Location'].str.contains(location_filter)]
         
     if df.empty:
         st.info("No tracked inventory for this location during the period.")
         return
 
-    # Categorize into fixed buckets
     bins = [-1, 30, 60, 90, float('inf')]
     labels = ['0-30', '31-60', '61-90', '90+']
     df['Age Bucket'] = pd.cut(df['Age'], bins=bins, labels=labels)
-    
-    # Group by Day and the newly created Age Bucket
     grouped = df.groupby(['Day', 'Age Bucket'])['Qty'].sum().reset_index()
     
-    # Map Exact colors from user screenshot
-    color_map = {
-        '0-30': '#82CAFA',   # Light Blue
-        '31-60': '#0066CC',  # Dark Blue
-        '61-90': '#FF9999',  # Light Red/Pink
-        '90+': '#FF0000'     # Bright Red
-    }
-    
-    fig = px.bar(grouped, x="Day", y="Qty", color="Age Bucket", 
-                 color_discrete_map=color_map,
-                 category_orders={"Age Bucket": ['0-30', '31-60', '61-90', '90+']})
+    color_map = {'0-30': '#82CAFA', '31-60': '#0066CC', '61-90': '#FF9999', '90+': '#FF0000'}
+    fig = px.bar(grouped, x="Day", y="Qty", color="Age Bucket", color_discrete_map=color_map, category_orders={"Age Bucket": ['0-30', '31-60', '61-90', '90+']})
                  
     fig.update_layout(
-        barmode='stack', 
-        plot_bgcolor='rgba(0,0,0,0)', 
-        xaxis_title="Day", 
-        yaxis_title="Units (Qty)",
-        legend_title="Age (Days)",
-        margin=dict(l=0, r=0, t=30, b=80),
-        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
-        bargap=0  # Makes bars flush against each other like an area chart
+        barmode='stack', plot_bgcolor='rgba(0,0,0,0)', xaxis_title="Day", yaxis_title="Units (Qty)",
+        legend_title="Age (Days)", margin=dict(l=0, r=0, t=30, b=80),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5), bargap=0
     )
-    
     fig.update_traces(marker_line_width=0)
     fig.update_yaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)', zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
     fig.update_xaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_working_capital_chart_single(df, cost, pipe_cost, include_pipeline):
+    df_wc = pd.DataFrame({'Day': df['Day']})
+    df_wc['On-Hand'] = df['Closing Balance'] * cost
+    if include_pipeline:
+        df_wc['Pipeline'] = df['Pipeline Inventory'] * pipe_cost
+        df_wc['Overall System'] = df_wc['On-Hand'] + df_wc['Pipeline']
+    else:
+        df_wc['Overall System'] = df_wc['On-Hand']
+
+    fig = px.line(df_wc, x='Day', y=[c for c in df_wc.columns if c != 'Day'], title="Dynamic Working Capital ($)", labels={'value': 'USD ($)', 'variable': 'Location'})
+    fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=0, r=0, t=40, b=80), legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5))
+    fig.update_xaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
+    fig.update_yaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)', zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_working_capital_chart_multi(df_sec, df_main, s_cost, m_cost, s_pipe_cost, m_pipe_cost, include_pipeline):
+    df_wc = pd.DataFrame({'Day': df_sec['Day']})
+    df_wc['Secondary On-Hand'] = df_sec['Closing Balance'] * s_cost
+    df_wc['Main On-Hand'] = df_main['Closing Balance'] * m_cost
     
+    if include_pipeline:
+        df_wc['Secondary Pipeline'] = df_sec['Pipeline Inventory'] * s_pipe_cost
+        df_wc['Main Pipeline'] = df_main['Pipeline Inventory'] * m_pipe_cost
+        df_wc['Overall System'] = df_wc['Secondary On-Hand'] + df_wc['Main On-Hand'] + df_wc['Secondary Pipeline'] + df_wc['Main Pipeline']
+    else:
+        df_wc['Overall System'] = df_wc['Secondary On-Hand'] + df_wc['Main On-Hand']
+
+    fig = px.line(df_wc, x='Day', y=[c for c in df_wc.columns if c != 'Day'], title="Dynamic Working Capital ($)", labels={'value': 'USD ($)', 'variable': 'Location'})
+    fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=0, r=0, t=40, b=80), legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5))
+    fig.update_xaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
+    fig.update_yaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)', zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
     st.plotly_chart(fig, use_container_width=True)
 
 # --- App Configuration & State ---
@@ -454,15 +466,16 @@ with tab1:
     
     plot_df1 = pd.DataFrame({'Day': df_s1['Day'], 'On-Hand Inventory': df_s1['Closing Balance'], 'Pipeline Inventory': df_s1['Pipeline Inventory'], 'Backlogged Orders': df_s1['Backlogs'], 'ROP Limit': s1_actual_rop})
     render_interactive_chart(plot_df1, ['On-Hand Inventory', 'Pipeline Inventory', 'Backlogged Orders', 'ROP Limit'])
+
+    st.markdown("### 📈 Working Capital Analysis")
+    show_pipe_1 = st.checkbox("Include Pipeline Inventory in WC Calculation", value=True, key="wc_t1")
+    render_working_capital_chart_single(df_s1, s1_cost, s1_pipeline_cost, show_pipe_1)
     
     st.markdown("### 📊 Daily Age Profile & Aging Buckets")
-    
     tab1_sub1, tab1_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
-    
     with tab1_sub1:
         bucket_view_1 = st.selectbox("Select View", ["Overall System", "Central On-Hand", "Supplier Pipeline"], key="b_s1")
         render_aging_buckets_chart(d_age_s1, bucket_view_1)
-        
     with tab1_sub2:
         selected_day_1 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s1")
         render_daily_age_profile(d_age_s1, selected_day_1)
@@ -552,15 +565,16 @@ with tab2:
 
     plot_df2 = pd.DataFrame({'Day': df_sec_s2['Day'], 'Sec On-Hand': df_sec_s2['Closing Balance'], 'Sec Pipeline': df_sec_s2['Pipeline Inventory'], 'Sec Backlogged': df_sec_s2['Backlogs'], 'Main On-Hand': df_main_s2['Closing Balance'], 'Main Pipeline': df_main_s2['Pipeline Inventory']})
     render_interactive_chart(plot_df2, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
+
+    st.markdown("### 📈 Working Capital Analysis")
+    show_pipe_2 = st.checkbox("Include Pipeline Inventory in WC Calculation", value=True, key="wc_t2")
+    render_working_capital_chart_multi(df_sec_s2, df_main_s2, s2_sec_cost, s2_main_cost, s2_sec_cost, s2_main_cost, show_pipe_2)
     
     st.markdown("### 📊 Daily Age Profile & Aging Buckets")
-    
     tab2_sub1, tab2_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
-    
     with tab2_sub1:
         bucket_view_2 = st.selectbox("Select View", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="b_s2")
         render_aging_buckets_chart(d_age_s2, bucket_view_2)
-        
     with tab2_sub2:
         selected_day_2 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s2")
         render_daily_age_profile(d_age_s2, selected_day_2)
@@ -645,15 +659,16 @@ with tab3:
 
     plot_df3 = pd.DataFrame({'Day': df_sec_s3['Day'], 'Sec On-Hand': df_sec_s3['Closing Balance'], 'Sec Pipeline': df_sec_s3['Pipeline Inventory'], 'Sec Backlogged': df_sec_s3['Backlogs'], 'Main On-Hand': df_main_s3['Closing Balance'], 'Main Pipeline': df_main_s3['Pipeline Inventory']})
     render_interactive_chart(plot_df3, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
+
+    st.markdown("### 📈 Working Capital Analysis")
+    show_pipe_3 = st.checkbox("Include Pipeline Inventory in WC Calculation", value=True, key="wc_t3")
+    render_working_capital_chart_multi(df_sec_s3, df_main_s3, s3_sec_cost, s3_main_cost, s3_sec_cost, s3_main_cost, show_pipe_3)
     
     st.markdown("### 📊 Daily Age Profile & Aging Buckets")
-    
     tab3_sub1, tab3_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
-    
     with tab3_sub1:
         bucket_view_3 = st.selectbox("Select View", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="b_s3")
         render_aging_buckets_chart(d_age_s3, bucket_view_3)
-        
     with tab3_sub2:
         selected_day_3 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s3")
         render_daily_age_profile(d_age_s3, selected_day_3)
