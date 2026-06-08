@@ -16,7 +16,6 @@ def convert_df_to_excel(df):
     return output.getvalue()
 
 # --- Core Financial Calculations ---
-# --- Core Financial Calculations ---
 def get_recommendations(demand, std_dev, lead_time, service_level):
     if lead_time <= 0: return 0, 0
     z_score = norm.ppf(service_level)
@@ -42,8 +41,7 @@ def simulate_single_stage_detailed(demands, rop, q, lead_time, warmup, allow_par
     closing_bal = np.zeros(total_days); orders_given = np.zeros(total_days)
     pipeline_arr = np.zeros(total_days)
     
-    # Updated: Opening balance is 1.25 * production trigger point
-    inv = rop * 1.25
+    inv = rop * 1.25  # Initialize safely above trigger
     pipe_qty = 0; backlog = 0
     arrivals = np.zeros(total_days + int(lead_time) + 1)
     
@@ -137,9 +135,7 @@ def simulate_single_stage_detailed(demands, rop, q, lead_time, warmup, allow_par
 def simulate_two_stage_detailed(
     demands, sec_rop, sec_q, sec_lt, main_rop, main_q, main_lt, warmup, 
     sec_allow_partial, sec_track_backlogs, main_allow_partial, main_track_backlogs, 
-    strategy="installation",
-    sec_policy="continuous", sec_r=1, sec_s=0,
-    main_policy="continuous", main_r=1, main_s=0
+    strategy="installation", sec_policy="continuous", sec_r=1, sec_s=0, main_policy="continuous", main_r=1, main_s=0
 ):
     total_days = len(demands)
     
@@ -151,7 +147,6 @@ def simulate_two_stage_detailed(
     m_sales = np.zeros(total_days); m_short = np.zeros(total_days); m_back = np.zeros(total_days)
     m_close = np.zeros(total_days); m_order = np.zeros(total_days); m_pipe = np.zeros(total_days)
 
-    # Updated: Opening balance is 1.25 * production trigger point (ROP or Target Level)
     main_inv = (main_rop * 1.25) if main_policy == "continuous" else (main_s * 1.25)
     sec_inv = (sec_rop * 1.25) if sec_policy == "continuous" else (sec_s * 1.25)
     
@@ -263,7 +258,6 @@ def simulate_two_stage_detailed(
                     for b in batches:
                         if 0 <= b['order_t'] <= t: daily_inventory_age.append({'Day': day_val, 'Location': 'Sec Pipeline', 'Age': t - b['order_t'], 'Qty': b['qty']})
 
-        # --- REORDER TRIGGERS ---
         sec_pos = sec_inv + sec_pipe_qty + main_backlog_to_sec - sec_backlog
         sec_order_given = 0; shortage_from_supplier = 0 
         sec_trigger_action = False
@@ -273,7 +267,7 @@ def simulate_two_stage_detailed(
                 sec_trigger_action = True
                 sec_order_qty_eval = sec_q
         elif sec_policy == "periodic":
-            if t % sec_r == 0: # Review interval hit
+            if t % sec_r == 0:
                 if sec_pos < sec_s:
                     sec_trigger_action = True
                     sec_order_qty_eval = sec_s - sec_pos
@@ -313,8 +307,7 @@ def simulate_two_stage_detailed(
         
         if main_trigger_action:
             main_order_given = main_order_qty_eval
-            main_arrivals[t + int(main_lt)] += main_order_qty_eval
-            main_pipe_qty += main_order_qty_eval
+            main_arrivals[t + int(main_lt)] += main_order_qty_eval; main_pipe_qty += main_order_qty_eval
             main_pipe_events[t + int(main_lt)].append({'qty': main_order_qty_eval, 'order_t': t, 'main_arr_t': t + int(main_lt)})
             
         s_recv[t] = s_arr; s_avail[t] = s_opening[t] + s_arr; s_sales[t] = sales; s_short[t] = shortage
@@ -340,6 +333,7 @@ def simulate_two_stage_detailed(
     vol_fr = total_sales / total_dem if total_dem > 0 else 1.0
     csl = 1 - (stockout_days / (total_days - warmup))
     return df_sec, df_main, vol_fr, csl, main_delay_days, pd.DataFrame(age_records), pd.DataFrame(daily_inventory_age), total_sales, total_dem, stockout_days
+
 # --- Plotly Helper Functions ---
 def render_interactive_chart(df, y_cols):
     fig = go.Figure()
@@ -383,10 +377,8 @@ def render_daily_age_profile(df_snapshots, selected_day):
 def render_aging_buckets_chart(df_snapshots, location_filter):
     if df_snapshots.empty: return
     df = df_snapshots.copy()
-    
     if location_filter != "Overall System":
         df = df[df['Location'].str.contains(location_filter)]
-        
     if df.empty:
         st.info("No tracked inventory for this location during the period.")
         return
@@ -428,7 +420,6 @@ def render_working_capital_chart_multi(df_sec, df_main, s_cost, m_cost, s_pipe_c
     df_wc = pd.DataFrame({'Day': df_sec['Day']})
     df_wc['Secondary On-Hand'] = df_sec['Closing Balance'] * s_cost
     df_wc['Main On-Hand'] = df_main['Closing Balance'] * m_cost
-    
     if include_pipeline:
         df_wc['Secondary Pipeline'] = df_sec['Pipeline Inventory'] * s_pipe_cost
         df_wc['Main Pipeline'] = df_main['Pipeline Inventory'] * m_pipe_cost
@@ -490,22 +481,22 @@ with tab1:
     
     st.markdown("#### Fulfillment Rules")
     s1_col1, s1_col2 = st.columns(2)
-    s1_allow_partial = s1_col1.checkbox("Allow Partial", value=True, key="s1_partial", help="Ship available inventory even if it doesn't cover the full order.")
-    s1_track_backlogs = s1_col2.checkbox("Track Backlogs", value=True, key="s1_backlog", help="Unmet demand goes into a backlog queue instead of being permanently lost.")
+    s1_allow_partial = s1_col1.checkbox("Allow Partial", value=True, key="s1_partial")
+    s1_track_backlogs = s1_col2.checkbox("Track Backlogs", value=True, key="s1_backlog")
     
     st.markdown("---")
-    df_s1, vol_fr_1, csl_1, age_s1, d_age_s1 = simulate_single_stage_detailed(st.session_state.demand_array, s1_actual_rop, s1_q, s1_lead_time, warmup_days, s1_allow_partial, s1_track_backlogs)
+    df_s1, vol_fr_1, csl_1, age_s1, d_age_s1, t_sales_1, t_dem_1, stockout_d_1 = simulate_single_stage_detailed(st.session_state.demand_array, s1_actual_rop, s1_q, s1_lead_time, warmup_days, s1_allow_partial, s1_track_backlogs)
 
     s1_avg_oh = df_s1['Closing Balance'].mean(); s1_avg_pipe = df_s1['Pipeline Inventory'].mean()
     s1_sim_wc = (s1_avg_oh * s1_cost) + (s1_avg_pipe * s1_pipeline_cost)
     s1_daily_wc = (df_s1['Closing Balance'] * s1_cost) + (df_s1['Pipeline Inventory'] * s1_pipeline_cost)
     s1_peak_wc = s1_daily_wc.max()
-    tot_sales_1 = df_s1['Sales'].sum()
 
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Simulated Avg WC", f"${s1_sim_wc:,.2f}"); m2.metric("Peak Working Capital", f"${s1_peak_wc:,.2f}")
-    m3.metric("Volume Fill Rate", f"{vol_fr_1*100:.1f}%"); m4.metric("Cycle Service Level", f"{csl_1*100:.1f}%")
-    m5.metric("Total Sales (Units)", f"{tot_sales_1:,.0f}")
+    m3.metric("Volume Fill Rate", f"{vol_fr_1*100:.1f}%", f"{t_sales_1:,.0f} / {t_dem_1:,.0f} Phys.", delta_color="off")
+    m4.metric("Service Level", f"{csl_1*100:.1f}%", f"{sim_days - stockout_d_1:,.0f} / {sim_days:,.0f} Days", delta_color="off")
+    m5.metric("Total Sales", f"{t_sales_1:,.0f}")
     
     plot_df1 = pd.DataFrame({'Day': df_s1['Day'], 'On-Hand Inventory': df_s1['Closing Balance'], 'Pipeline Inventory': df_s1['Pipeline Inventory'], 'Backlogged Orders': df_s1['Backlogs'], 'ROP Limit': s1_actual_rop})
     render_interactive_chart(plot_df1, ['On-Hand Inventory', 'Pipeline Inventory', 'Backlogged Orders', 'ROP Limit'])
@@ -533,30 +524,6 @@ with tab1:
         render_age_histogram(age_s1, ['Pipeline Time', 'Warehouse Time', 'Total Time'])
     else:
         st.info("Not enough units sold after the warmup period to calculate age.")
-        
-    st.markdown("### 💰 Average Inventory & Valuation Summary")
-    val_data_1a = {
-        "Asset Location / State": ["Central Warehouse (On-Hand)", "Pipeline (Supplier → Central)"],
-        "Unit Cost": [f"${s1_cost:,.2f}", f"${s1_pipeline_cost:,.2f}"],
-        "Average Units": [f"{s1_avg_oh:,.0f}", f"{s1_avg_pipe:,.0f}"],
-        "Average Value": [f"${s1_avg_oh * s1_cost:,.2f}", f"${s1_avg_pipe * s1_pipeline_cost:,.2f}"]
-    }
-    val_data_1b = {
-        "Ownership Entity": ["Central Facility (Total System)"],
-        "Average Total Units": [f"{s1_avg_oh + s1_avg_pipe:,.0f}"],
-        "Average Total Value": [f"${s1_sim_wc:,.2f}"]
-    }
-    tcol1_1, tcol1_2 = st.columns(2)
-    with tcol1_1: st.table(pd.DataFrame(val_data_1a).set_index("Asset Location / State"))
-    with tcol1_2: st.table(pd.DataFrame(val_data_1b).set_index("Ownership Entity"))
-
-    st.markdown("### 📅 Daily Inventory Tracking")
-    df_tab1_daily = df_s1[['Day', 'Closing Balance', 'Pipeline Inventory']].copy().rename(columns={'Closing Balance': 'On-Hand Inventory (Units)'})
-    col_dl1, col_dl2 = st.columns([3, 1])
-    with col_dl1: st.dataframe(df_tab1_daily, use_container_width=True, height=250)
-    with col_dl2:
-        st.write("Download this table as an Excel file:")
-        st.download_button(label="📥 Download Excel", data=convert_df_to_excel(df_tab1_daily), file_name="central_warehouse_daily_inventory.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_tab1")
 
 # ==========================================
 # TAB 2: TWO-STAGE (LOCAL ROP)
@@ -578,7 +545,7 @@ with tab2:
     
     st.markdown("#### Main (Hub)")
     c3a, c3b, c3c, c3d = st.columns(4)
-    s2_main_demand = c3a.number_input("Agg Demand", min_value=0.0, value=global_dem, step=10.0, key="s2_main_d", help="Used only to calculate the Main suggested ROP")
+    s2_main_demand = c3a.number_input("Agg Demand", min_value=0.0, value=global_dem, step=10.0, key="s2_main_d")
     s2_main_std = c3b.number_input("Agg Std Dev", min_value=0.0, value=global_std, step=5.0, key="s2_main_std")
     s2_main_lt = c3c.number_input("Supplier LT", min_value=0.0, value=10.0, step=1.0, key="s2_main_lt")
     s2_main_sl = c3d.slider("Main Target Fill Rate", 0.50, 0.999, 0.98, key="s2_main_sl")
@@ -593,18 +560,19 @@ with tab2:
     s2_main_track_backlogs = c3i.checkbox("Track Backlogs", value=True, key="s2_main_backlog")
 
     st.markdown("---")
-    df_sec_s2, df_main_s2, vol_fr_2, csl_2, delay_2, age_s2, d_age_s2 = simulate_two_stage_detailed(st.session_state.demand_array, s2_sec_actual_rop, s2_sec_q, s2_sec_lt, s2_main_actual_rop, s2_main_q, s2_main_lt, warmup_days, s2_sec_allow_partial, s2_sec_track_backlogs, s2_main_allow_partial, s2_main_track_backlogs, "installation")
+    df_sec_s2, df_main_s2, vol_fr_2, csl_2, delay_2, age_s2, d_age_s2, t_sales_2, t_dem_2, stockout_d_2 = simulate_two_stage_detailed(st.session_state.demand_array, s2_sec_actual_rop, s2_sec_q, s2_sec_lt, s2_main_actual_rop, s2_main_q, s2_main_lt, warmup_days, s2_sec_allow_partial, s2_sec_track_backlogs, s2_main_allow_partial, s2_main_track_backlogs, "installation")
     
     avg_sec_oh_2 = df_sec_s2['Closing Balance'].mean(); avg_sec_pipe_2 = df_sec_s2['Pipeline Inventory'].mean()
     avg_main_oh_2 = df_main_s2['Closing Balance'].mean(); avg_main_pipe_2 = df_main_s2['Pipeline Inventory'].mean()
     total_sys_val_2 = (avg_sec_oh_2 * s2_sec_cost) + (avg_sec_pipe_2 * s2_sec_cost) + (avg_main_oh_2 * s2_main_cost) + (avg_main_pipe_2 * s2_main_cost)
     s2_daily_sys_val = (df_sec_s2['Closing Balance'] + df_sec_s2['Pipeline Inventory']) * s2_sec_cost + (df_main_s2['Closing Balance'] + df_main_s2['Pipeline Inventory']) * s2_main_cost
-    peak_sys_val_2 = s2_daily_sys_val.max(); tot_sales_2 = df_sec_s2['Sales'].sum()
+    peak_sys_val_2 = s2_daily_sys_val.max()
 
     sm1, sm2, sm3, sm4, sm5, sm6 = st.columns(6)
     sm1.metric("Simulated Avg WC", f"${total_sys_val_2:,.2f}"); sm2.metric("Peak Working Capital", f"${peak_sys_val_2:,.2f}")
-    sm3.metric("Volume Fill Rate", f"{vol_fr_2*100:.1f}%"); sm4.metric("Service Level", f"{csl_2*100:.1f}%")
-    sm5.metric("Main Delays", f"{delay_2} Days"); sm6.metric("Total Sales", f"{tot_sales_2:,.0f}")
+    sm3.metric("Volume Fill Rate", f"{vol_fr_2*100:.1f}%", f"{t_sales_2:,.0f} / {t_dem_2:,.0f} Phys.", delta_color="off")
+    sm4.metric("Service Level", f"{csl_2*100:.1f}%", f"{sim_days - stockout_d_2:,.0f} / {sim_days:,.0f} Days", delta_color="off")
+    sm5.metric("Main Delays", f"{delay_2} Days"); sm6.metric("Total Sales", f"{t_sales_2:,.0f}")
 
     plot_df2 = pd.DataFrame({'Day': df_sec_s2['Day'], 'Sec On-Hand': df_sec_s2['Closing Balance'], 'Sec Pipeline': df_sec_s2['Pipeline Inventory'], 'Sec Backlogged': df_sec_s2['Backlogs'], 'Main On-Hand': df_main_s2['Closing Balance'], 'Main Pipeline': df_main_s2['Pipeline Inventory']})
     render_interactive_chart(plot_df2, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
@@ -632,24 +600,6 @@ with tab2:
         a4.metric("Avg Sec WH", f"{(age_s2['Sec Warehouse Time'] * age_s2['Qty']).sum() / age_s2['Qty'].sum():.1f} d")
         a5.metric("Total Age at Sale", f"{(age_s2['Total Time'] * age_s2['Qty']).sum() / age_s2['Qty'].sum():.1f} d")
         render_age_histogram(age_s2, ['Main Warehouse Time', 'Sec Warehouse Time', 'Total Time'])
-    else:
-        st.info("Not enough units sold after the warmup period to calculate age.")
-
-    st.markdown("### 💰 Average Inventory & Valuation Summary")
-    val_data_2a = {
-        "Asset Location / State": ["Secondary Warehouse (On-Hand)", "Pipeline (Main → Secondary)", "Main Warehouse (On-Hand)", "Pipeline (Supplier → Main)"],
-        "Unit Cost": [f"${s2_sec_cost:,.2f}", f"${s2_sec_cost:,.2f}", f"${s2_main_cost:,.2f}", f"${s2_main_cost:,.2f}"],
-        "Average Units": [f"{avg_sec_oh_2:,.0f}", f"{avg_sec_pipe_2:,.0f}", f"{avg_main_oh_2:,.0f}", f"{avg_main_pipe_2:,.0f}"],
-        "Average Value": [f"${avg_sec_oh_2 * s2_sec_cost:,.2f}", f"${avg_sec_pipe_2 * s2_sec_cost:,.2f}", f"${avg_main_oh_2 * s2_main_cost:,.2f}", f"${avg_main_pipe_2 * s2_main_cost:,.2f}"]
-    }
-    val_data_2b = {
-        "Ownership Entity": ["Secondary (Includes Main→Sec Pipeline)", "Main (Includes Sup→Main Pipeline)"],
-        "Average Total Units": [f"{avg_sec_oh_2 + avg_sec_pipe_2:,.0f}", f"{avg_main_oh_2 + avg_main_pipe_2:,.0f}"],
-        "Average Total Value": [f"${(avg_sec_oh_2 + avg_sec_pipe_2) * s2_sec_cost:,.2f}", f"${(avg_main_oh_2 + avg_main_pipe_2) * s2_main_cost:,.2f}"]
-    }
-    tcol2_1, tcol2_2 = st.columns(2)
-    with tcol2_1: st.table(pd.DataFrame(val_data_2a).set_index("Asset Location / State"))
-    with tcol2_2: st.table(pd.DataFrame(val_data_2b).set_index("Ownership Entity"))
 
 # ==========================================
 # TAB 3: ECHELON SYSTEM
@@ -687,18 +637,19 @@ with tab3:
     s3_main_track_backlogs = c5i.checkbox("Track Backlogs", value=True, key="s3_main_backlog")
 
     st.markdown("---")
-    df_sec_s3, df_main_s3, vol_fr_3, csl_3, delay_3, age_s3, d_age_s3 = simulate_two_stage_detailed(st.session_state.demand_array, s3_sec_actual_rop, s3_sec_q, s3_sec_lt, s3_echelon_actual_rop, s3_main_q, s3_main_lt, warmup_days, s3_sec_allow_partial, s3_sec_track_backlogs, s3_main_allow_partial, s3_main_track_backlogs, "echelon")
+    df_sec_s3, df_main_s3, vol_fr_3, csl_3, delay_3, age_s3, d_age_s3, t_sales_3, t_dem_3, stockout_d_3 = simulate_two_stage_detailed(st.session_state.demand_array, s3_sec_actual_rop, s3_sec_q, s3_sec_lt, s3_echelon_actual_rop, s3_main_q, s3_main_lt, warmup_days, s3_sec_allow_partial, s3_sec_track_backlogs, s3_main_allow_partial, s3_main_track_backlogs, "echelon")
     
     avg_sec_oh_3 = df_sec_s3['Closing Balance'].mean(); avg_sec_pipe_3 = df_sec_s3['Pipeline Inventory'].mean()
     avg_main_oh_3 = df_main_s3['Closing Balance'].mean(); avg_main_pipe_3 = df_main_s3['Pipeline Inventory'].mean()
     total_sys_val_3 = (avg_sec_oh_3 * s3_sec_cost) + (avg_sec_pipe_3 * s3_sec_cost) + (avg_main_oh_3 * s3_main_cost) + (avg_main_pipe_3 * s3_main_cost)
     s3_daily_sys_val = (df_sec_s3['Closing Balance'] + df_sec_s3['Pipeline Inventory']) * s3_sec_cost + (df_main_s3['Closing Balance'] + df_main_s3['Pipeline Inventory']) * s3_main_cost
-    peak_sys_val_3 = s3_daily_sys_val.max(); tot_sales_3 = df_sec_s3['Sales'].sum()
+    peak_sys_val_3 = s3_daily_sys_val.max()
 
     tm1, tm2, tm3, tm4, tm5, tm6 = st.columns(6)
     tm1.metric("Simulated Avg WC", f"${total_sys_val_3:,.2f}"); tm2.metric("Peak Working Capital", f"${peak_sys_val_3:,.2f}")
-    tm3.metric("Volume Fill Rate", f"{vol_fr_3*100:.1f}%"); tm4.metric("Service Level", f"{csl_3*100:.1f}%")
-    tm5.metric("Main Delays", f"{delay_3} Days"); tm6.metric("Total Sales", f"{tot_sales_3:,.0f}")
+    tm3.metric("Volume Fill Rate", f"{vol_fr_3*100:.1f}%", f"{t_sales_3:,.0f} / {t_dem_3:,.0f} Phys.", delta_color="off")
+    tm4.metric("Service Level", f"{csl_3*100:.1f}%", f"{sim_days - stockout_d_3:,.0f} / {sim_days:,.0f} Days", delta_color="off")
+    tm5.metric("Main Delays", f"{delay_3} Days"); tm6.metric("Total Sales", f"{t_sales_3:,.0f}")
 
     plot_df3 = pd.DataFrame({'Day': df_sec_s3['Day'], 'Sec On-Hand': df_sec_s3['Closing Balance'], 'Sec Pipeline': df_sec_s3['Pipeline Inventory'], 'Sec Backlogged': df_sec_s3['Backlogs'], 'Main On-Hand': df_main_s3['Closing Balance'], 'Main Pipeline': df_main_s3['Pipeline Inventory']})
     render_interactive_chart(plot_df3, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
@@ -726,32 +677,7 @@ with tab3:
         a4.metric("Avg Sec WH", f"{(age_s3['Sec Warehouse Time'] * age_s3['Qty']).sum() / age_s3['Qty'].sum():.1f} d")
         a5.metric("Total Age at Sale", f"{(age_s3['Total Time'] * age_s3['Qty']).sum() / age_s3['Qty'].sum():.1f} d")
         render_age_histogram(age_s3, ['Main Warehouse Time', 'Sec Warehouse Time', 'Total Time'])
-    else:
-        st.info("Not enough units sold after the warmup period to calculate age.")
 
-    st.markdown("### 💰 Average Inventory & Valuation Summary")
-    val_data_3a = {
-        "Asset Location / State": ["Secondary Warehouse (On-Hand)", "Pipeline (Main → Secondary)", "Main Warehouse (On-Hand)", "Pipeline (Supplier → Main)"],
-        "Unit Cost": [f"${s3_sec_cost:,.2f}", f"${s3_sec_cost:,.2f}", f"${s3_main_cost:,.2f}", f"${s3_main_cost:,.2f}"],
-        "Average Units": [f"{avg_sec_oh_3:,.0f}", f"{avg_sec_pipe_3:,.0f}", f"{avg_main_oh_3:,.0f}", f"{avg_main_pipe_3:,.0f}"],
-        "Average Value": [f"${avg_sec_oh_3 * s3_sec_cost:,.2f}", f"${avg_sec_pipe_3 * s3_sec_cost:,.2f}", f"${avg_main_oh_3 * s3_main_cost:,.2f}", f"${avg_main_pipe_3 * s3_main_cost:,.2f}"]
-    }
-    val_data_3b = {
-        "Ownership Entity": ["Secondary (Includes Main→Sec Pipeline)", "Main (Includes Sup→Main Pipeline)"],
-        "Average Total Units": [f"{avg_sec_oh_3 + avg_sec_pipe_3:,.0f}", f"{avg_main_oh_3 + avg_main_pipe_3:,.0f}"],
-        "Average Total Value": [f"${(avg_sec_oh_3 + avg_sec_pipe_3) * s3_sec_cost:,.2f}", f"${(avg_main_oh_3 + avg_main_pipe_3) * s3_main_cost:,.2f}"]
-    }
-    tcol3_1, tcol3_2 = st.columns(2)
-    with tcol3_1: st.table(pd.DataFrame(val_data_3a).set_index("Asset Location / State"))
-    with tcol3_2: st.table(pd.DataFrame(val_data_3b).set_index("Ownership Entity"))
-    
-    st.markdown("### 📅 Daily Inventory Tracking (System-Wide)")
-    df_tab3_daily = pd.DataFrame({'Day': df_sec_s3['Day'], 'Secondary On-Hand': df_sec_s3['Closing Balance'], 'Secondary Pipeline': df_sec_s3['Pipeline Inventory'], 'Main On-Hand': df_main_s3['Closing Balance'], 'Main Pipeline': df_main_s3['Pipeline Inventory']})
-    col_dl3, col_dl4 = st.columns([3, 1])
-    with col_dl3: st.dataframe(df_tab3_daily, use_container_width=True, height=250)
-    with col_dl4:
-        st.write("Download this table as an Excel file:")
-        st.download_button(label="📥 Download Excel", data=convert_df_to_excel(df_tab3_daily), file_name="multi_echelon_daily_inventory.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_tab3")
 # ==========================================
 # TAB 4: POLICY DIAGNOSTICS (CONTINUOUS VS PERIODIC)
 # ==========================================
@@ -764,7 +690,7 @@ with tab4:
         c6a, c6b, c6c = st.columns(3)
         s4_sec_lt = c6a.number_input("Transit LT", min_value=0.0, value=3.0, step=1.0, key="s4_sec_lt")
         s4_sec_sl = c6b.slider("Sec Target Fill Rate", 0.50, 0.999, 0.95, key="s4_sec_sl")
-        s4_sec_cost = c6c.number_input("Unit Cost (₹)", min_value=0.01, value=60.0, step=5.0, key="s4_sec_cost")
+        s4_sec_cost = c6c.number_input("Unit Cost ($)", min_value=0.01, value=60.0, step=5.0, key="s4_sec_cost")
         
         c6d, c6e, c6f = st.columns(3)
         if s4_sec_policy == "Continuous (s, Q)":
@@ -772,13 +698,13 @@ with tab4:
             rec_s4_sec_rop, _ = get_recommendations(global_dem, global_std, s4_sec_lt, s4_sec_sl)
             s4_sec_actual_rop = c6e.number_input("Actual ROP (s)", min_value=0, value=int(rec_s4_sec_rop), step=10, key="s4_sec_rop")
             c6e.caption(f"💡 Suggested ROP: **{rec_s4_sec_rop:,.0f}**")
-            s4_sec_r, s4_sec_s = 1, 0 # Defaults for function
+            s4_sec_r, s4_sec_s = 1, 0
         else:
             s4_sec_r = c6d.number_input("Review Period (R)", min_value=1, value=7, step=1, key="s4_sec_r")
             rec_s4_sec_s, _ = get_periodic_recommendations(global_dem, global_std, s4_sec_lt, s4_sec_r, s4_sec_sl)
             s4_sec_s = c6e.number_input("Target Level (S)", min_value=0, value=int(rec_s4_sec_s), step=10, key="s4_sec_s_tgt")
             c6e.caption(f"💡 Suggested Target: **{rec_s4_sec_s:,.0f}**")
-            s4_sec_q, s4_sec_actual_rop = 0, 0 # Defaults for function
+            s4_sec_q, s4_sec_actual_rop = 0, 0
             
         s4_sec_allow_partial = c6f.checkbox("Allow Partial", value=True, key="s4_sec_partial")
         s4_sec_track_backlogs = c6f.checkbox("Track Backlogs", value=True, key="s4_sec_backlog")
@@ -794,12 +720,11 @@ with tab4:
         s4_main_sl = c7c.slider("Main Target Fill Rate", 0.50, 0.999, 0.98, key="s4_main_sl")
         
         c7d, c7e, c7f = st.columns(3)
-        s4_main_cost = c7d.number_input("Unit Cost (₹)", min_value=0.01, value=50.0, step=5.0, key="s4_main_cost")
+        s4_main_cost = c7d.number_input("Unit Cost ($)", min_value=0.01, value=50.0, step=5.0, key="s4_main_cost")
         
         if s4_main_policy == "Continuous (s, Q)":
             s4_main_q = c7e.number_input("Main Order Qty (Q)", min_value=1, value=800, step=50, key="s4_main_q")
             _, main_base_ss = get_recommendations(s4_main_demand, global_std, s4_main_lt, s4_main_sl)
-            # Standard echelon logic for continuous
             rec_echelon_rop = rec_s4_sec_rop + (s4_main_demand * s4_main_lt) + main_base_ss if s4_sec_policy == "Continuous (s, Q)" else rec_s4_sec_s + (s4_main_demand * s4_main_lt) + main_base_ss
             s4_echelon_actual_rop = c7f.number_input("Echelon Actual ROP", min_value=0, value=int(rec_echelon_rop), step=10, key="s4_ech_act")
             c7f.caption(f"💡 Suggested: **{rec_echelon_rop:,.0f}**")
@@ -807,7 +732,6 @@ with tab4:
         else:
             s4_main_r = c7e.number_input("Main Review Period (R)", min_value=1, value=14, step=1, key="s4_main_r")
             rec_main_s, _ = get_periodic_recommendations(s4_main_demand, global_std, s4_main_lt, s4_main_r, s4_main_sl)
-            # Echelon Target = Secondary Trigger logic + Main Target Level
             sec_trigger = rec_s4_sec_rop if s4_sec_policy == "Continuous (s, Q)" else rec_s4_sec_s
             rec_echelon_s = sec_trigger + rec_main_s
             s4_main_s = c7f.number_input("Echelon Target Level (S)", min_value=0, value=int(rec_echelon_s), step=10, key="s4_main_s_tgt")
@@ -820,7 +744,6 @@ with tab4:
 
     st.markdown("---")
     
-    # Run Simulation
     sec_pol_str = "continuous" if s4_sec_policy == "Continuous (s, Q)" else "periodic"
     main_pol_str = "continuous" if s4_main_policy == "Continuous (s, Q)" else "periodic"
     
@@ -830,25 +753,18 @@ with tab4:
         "echelon", sec_pol_str, s4_sec_r, s4_sec_s, main_pol_str, s4_main_r, s4_main_s
     )
     
-    avg_sec_oh_4 = df_sec_s4['Closing Balance'].mean()
-    avg_sec_pipe_4 = df_sec_s4['Pipeline Inventory'].mean()
-    avg_main_oh_4 = df_main_s4['Closing Balance'].mean()
-    avg_main_pipe_4 = df_main_s4['Pipeline Inventory'].mean()
-    
+    avg_sec_oh_4 = df_sec_s4['Closing Balance'].mean(); avg_sec_pipe_4 = df_sec_s4['Pipeline Inventory'].mean()
+    avg_main_oh_4 = df_main_s4['Closing Balance'].mean(); avg_main_pipe_4 = df_main_s4['Pipeline Inventory'].mean()
     total_sys_val_4 = (avg_sec_oh_4 * s4_sec_cost) + (avg_sec_pipe_4 * s4_sec_cost) + (avg_main_oh_4 * s4_main_cost) + (avg_main_pipe_4 * s4_main_cost)
     s4_daily_sys_val = (df_sec_s4['Closing Balance'] + df_sec_s4['Pipeline Inventory']) * s4_sec_cost + (df_main_s4['Closing Balance'] + df_main_s4['Pipeline Inventory']) * s4_main_cost
     peak_sys_val_4 = s4_daily_sys_val.max()
 
     tm1, tm2, tm3, tm4, tm5, tm6 = st.columns(6)
-    tm1.metric("Simulated Avg WC", f"₹{total_sys_val_4:,.2f}")
-    tm2.metric("Peak Working Capital", f"₹{peak_sys_val_4:,.2f}")
-    # Absolute values displayed below percentage
+    tm1.metric("Simulated Avg WC", f"${total_sys_val_4:,.2f}"); tm2.metric("Peak Working Capital", f"${peak_sys_val_4:,.2f}")
     tm3.metric("Volume Fill Rate", f"{vol_fr_4*100:.1f}%", f"{t_sales_4:,.0f} / {t_dem_4:,.0f} Phys.", delta_color="off")
     tm4.metric("Service Level", f"{csl_4*100:.1f}%", f"{sim_days - stockout_d_4:,.0f} / {sim_days:,.0f} Days", delta_color="off")
-    tm5.metric("Main Delays", f"{delay_4} Days")
-    tm6.metric("Total Sales", f"{t_sales_4:,.0f}")
+    tm5.metric("Main Delays", f"{delay_4} Days"); tm6.metric("Total Sales", f"{t_sales_4:,.0f}")
 
-    # Ensure white backgrounds & Blue visuals for minimal aesthetics
     plot_df4 = pd.DataFrame({'Day': df_sec_s4['Day'], 'Sec On-Hand': df_sec_s4['Closing Balance'], 'Sec Pipeline': df_sec_s4['Pipeline Inventory'], 'Sec Backlogged': df_sec_s4['Backlogs'], 'Main On-Hand': df_main_s4['Closing Balance'], 'Main Pipeline': df_main_s4['Pipeline Inventory']})
     fig4 = go.Figure()
     color_map = {'Sec On-Hand': '#1f77b4', 'Sec Pipeline': '#aec7e8', 'Main On-Hand': '#0066CC', 'Main Pipeline': '#82CAFA', 'Sec Backlogged': '#d62728'}
@@ -882,8 +798,6 @@ with tab4:
         a5.metric("Total Age at Sale", f"{(age_s4['Total Time'] * age_s4['Qty']).sum() / age_s4['Qty'].sum():.1f} d")
         render_age_histogram(age_s4, ['Main Warehouse Time', 'Sec Warehouse Time', 'Total Time'])
 
-
-
 # ==========================================
 # MASTER COMPARISON TABLE
 # ==========================================
@@ -895,6 +809,8 @@ comparison_data = {
     "S2: Secondary": [f"{s2_sec_sl*100:.1f}%", f"{s2_sec_q:,.0f}", f"{rec_sec_rop:,.0f}", f"{s2_sec_actual_rop:,.0f}", f"${(avg_sec_oh_2+avg_sec_pipe_2)*s2_sec_cost:,.0f}", f"${peak_sys_val_2:,.0f} (System)", f"{tot_sales_2:,.0f}", "—"],
     "S2: Main": [f"{s2_main_sl*100:.1f}%", f"{s2_main_q:,.0f}", f"{rec_main_rop:,.0f}", f"{s2_main_actual_rop:,.0f}", f"${(avg_main_oh_2+avg_main_pipe_2)*s2_main_cost:,.0f}", "—", "—", f"{delay_2}"],
     "S3: Secondary": [f"{s3_sec_sl*100:.1f}%", f"{s3_sec_q:,.0f}", f"{rec_s3_sec_rop:,.0f}", f"{s3_sec_actual_rop:,.0f}", f"${(avg_sec_oh_3+avg_sec_pipe_3)*s3_sec_cost:,.0f}", f"${peak_sys_val_3:,.0f} (System)", f"{tot_sales_3:,.0f}", "—"],
-    "S3: Main (Echelon)": [f"{s3_main_sl*100:.1f}%", f"{s3_main_q:,.0f}", f"{rec_echelon_rop:,.0f}", f"{s3_echelon_actual_rop:,.0f}", f"${(avg_main_oh_3+avg_main_pipe_3)*s3_main_cost:,.0f}", "—", "—", f"{delay_3}"]
+    "S3: Main (Echelon)": [f"{s3_main_sl*100:.1f}%", f"{s3_main_q:,.0f}", f"{rec_echelon_rop:,.0f}", f"{s3_echelon_actual_rop:,.0f}", f"${(avg_main_oh_3+avg_main_pipe_3)*s3_main_cost:,.0f}", "—", "—", f"{delay_3}"],
+    "S4: Sec. Policy Test": [f"{s4_sec_sl*100:.1f}%", f"{s4_sec_q:,.0f}", f"{rec_s4_sec_rop:,.0f}", f"{s4_sec_actual_rop:,.0f}", f"${(avg_sec_oh_4+avg_sec_pipe_4)*s4_sec_cost:,.0f}", f"${peak_sys_val_4:,.0f} (System)", f"{t_sales_4:,.0f}", "—"],
+    "S4: Main Policy Test": [f"{s4_main_sl*100:.1f}%", f"{s4_main_q:,.0f}", f"{rec_echelon_rop if s4_main_policy == 'Continuous (s, Q)' else rec_echelon_s:,.0f}", f"{s4_echelon_actual_rop if s4_main_policy == 'Continuous (s, Q)' else s4_main_s:,.0f}", f"${(avg_main_oh_4+avg_main_pipe_4)*s4_main_cost:,.0f}", "—", "—", f"{delay_4}"]
 }
 st.table(pd.DataFrame(comparison_data).set_index("Metric"))
