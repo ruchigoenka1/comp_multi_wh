@@ -93,7 +93,6 @@ def simulate_single_stage_detailed(demands, rop, q, lead_time, warmup, allow_par
             total_dem += dem; total_sales += sales
             if sales < dem: stockout_days += 1
             
-            # Daily Snapshot for Age Graph
             day_val = t - warmup + 1
             for b in on_hand:
                 if b['order_t'] >= 0:
@@ -231,7 +230,6 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
             if sales < dem: stockout_days += 1
             if delayed_by_main: main_delay_days += 1
             
-            # Daily Snapshot for Age Graph
             day_val = t - warmup + 1
             for b in main_on_hand:
                 if b['order_t'] >= 0: daily_inventory_age.append({'Day': day_val, 'Location': 'Main On-Hand', 'Age': t - b['order_t'], 'Qty': b['qty']})
@@ -331,20 +329,62 @@ def render_daily_age_profile(df_snapshots, selected_day):
     if day_df.empty:
         st.info("No age data available for this day. (Units may belong to initial warmup stock with unknown origins).")
         return
-    
-    # Create an "Overall System" category
     overall_df = day_df.copy()
     overall_df['Location'] = 'Overall System'
     combined_df = pd.concat([day_df, overall_df])
     grouped = combined_df.groupby(['Location', 'Age'])['Qty'].sum().reset_index()
-    
-    # Bar Chart with diverging color map (Red=Old, Blue=New)
-    fig = px.bar(grouped, x="Location", y="Qty", color="Age",
-                 color_continuous_scale='RdYlBu_r', 
-                 title=f"Inventory Age Profile on Day {selected_day} (System Age)",
-                 labels={"Qty": "Total Units", "Age": "System Age (Days since ordered)"})
-    
+    fig = px.bar(grouped, x="Location", y="Qty", color="Age", color_continuous_scale='RdYlBu_r', title=f"Inventory Age Profile on Day {selected_day} (System Age)", labels={"Qty": "Total Units", "Age": "System Age (Days since ordered)"})
     fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', barmode='stack', margin=dict(l=0, r=0, t=40, b=0))
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_aging_buckets_chart(df_snapshots, location_filter):
+    if df_snapshots.empty: return
+    df = df_snapshots.copy()
+    
+    # Filter by specific location if it isn't "Overall System"
+    if location_filter != "Overall System":
+        # Handle multiple locations (e.g., both On-Hand and Pipeline if needed, or specific single locations)
+        df = df[df['Location'].str.contains(location_filter)]
+        
+    if df.empty:
+        st.info("No tracked inventory for this location during the period.")
+        return
+
+    # Categorize into fixed buckets
+    bins = [-1, 30, 60, 90, float('inf')]
+    labels = ['0-30', '31-60', '61-90', '90+']
+    df['Age Bucket'] = pd.cut(df['Age'], bins=bins, labels=labels)
+    
+    # Group by Day and the newly created Age Bucket
+    grouped = df.groupby(['Day', 'Age Bucket'])['Qty'].sum().reset_index()
+    
+    # Map Exact colors from user screenshot
+    color_map = {
+        '0-30': '#82CAFA',   # Light Blue
+        '31-60': '#0066CC',  # Dark Blue
+        '61-90': '#FF9999',  # Light Red/Pink
+        '90+': '#FF0000'     # Bright Red
+    }
+    
+    fig = px.bar(grouped, x="Day", y="Qty", color="Age Bucket", 
+                 color_discrete_map=color_map,
+                 category_orders={"Age Bucket": ['0-30', '31-60', '61-90', '90+']})
+                 
+    fig.update_layout(
+        barmode='stack', 
+        plot_bgcolor='rgba(0,0,0,0)', 
+        xaxis_title="Day", 
+        yaxis_title="Units (Qty)",
+        legend_title="Age (Days)",
+        margin=dict(l=0, r=0, t=30, b=80),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
+        bargap=0  # Makes bars flush against each other like an area chart
+    )
+    
+    fig.update_traces(marker_line_width=0)
+    fig.update_yaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)', zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
+    fig.update_xaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
+    
     st.plotly_chart(fig, use_container_width=True)
 
 # --- App Configuration & State ---
@@ -415,9 +455,17 @@ with tab1:
     plot_df1 = pd.DataFrame({'Day': df_s1['Day'], 'On-Hand Inventory': df_s1['Closing Balance'], 'Pipeline Inventory': df_s1['Pipeline Inventory'], 'Backlogged Orders': df_s1['Backlogs'], 'ROP Limit': s1_actual_rop})
     render_interactive_chart(plot_df1, ['On-Hand Inventory', 'Pipeline Inventory', 'Backlogged Orders', 'ROP Limit'])
     
-    st.markdown("### 📊 Daily Age Profile (FIFO)")
-    selected_day_1 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s1")
-    render_daily_age_profile(d_age_s1, selected_day_1)
+    st.markdown("### 📊 Daily Age Profile & Aging Buckets")
+    
+    tab1_sub1, tab1_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
+    
+    with tab1_sub1:
+        bucket_view_1 = st.selectbox("Select View", ["Overall System", "Central On-Hand", "Supplier Pipeline"], key="b_s1")
+        render_aging_buckets_chart(d_age_s1, bucket_view_1)
+        
+    with tab1_sub2:
+        selected_day_1 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s1")
+        render_daily_age_profile(d_age_s1, selected_day_1)
 
     st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
     if not age_s1.empty:
@@ -505,9 +553,17 @@ with tab2:
     plot_df2 = pd.DataFrame({'Day': df_sec_s2['Day'], 'Sec On-Hand': df_sec_s2['Closing Balance'], 'Sec Pipeline': df_sec_s2['Pipeline Inventory'], 'Sec Backlogged': df_sec_s2['Backlogs'], 'Main On-Hand': df_main_s2['Closing Balance'], 'Main Pipeline': df_main_s2['Pipeline Inventory']})
     render_interactive_chart(plot_df2, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
     
-    st.markdown("### 📊 Daily Age Profile (FIFO)")
-    selected_day_2 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s2")
-    render_daily_age_profile(d_age_s2, selected_day_2)
+    st.markdown("### 📊 Daily Age Profile & Aging Buckets")
+    
+    tab2_sub1, tab2_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
+    
+    with tab2_sub1:
+        bucket_view_2 = st.selectbox("Select View", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="b_s2")
+        render_aging_buckets_chart(d_age_s2, bucket_view_2)
+        
+    with tab2_sub2:
+        selected_day_2 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s2")
+        render_daily_age_profile(d_age_s2, selected_day_2)
 
     st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
     if not age_s2.empty:
@@ -590,9 +646,17 @@ with tab3:
     plot_df3 = pd.DataFrame({'Day': df_sec_s3['Day'], 'Sec On-Hand': df_sec_s3['Closing Balance'], 'Sec Pipeline': df_sec_s3['Pipeline Inventory'], 'Sec Backlogged': df_sec_s3['Backlogs'], 'Main On-Hand': df_main_s3['Closing Balance'], 'Main Pipeline': df_main_s3['Pipeline Inventory']})
     render_interactive_chart(plot_df3, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
     
-    st.markdown("### 📊 Daily Age Profile (FIFO)")
-    selected_day_3 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s3")
-    render_daily_age_profile(d_age_s3, selected_day_3)
+    st.markdown("### 📊 Daily Age Profile & Aging Buckets")
+    
+    tab3_sub1, tab3_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
+    
+    with tab3_sub1:
+        bucket_view_3 = st.selectbox("Select View", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="b_s3")
+        render_aging_buckets_chart(d_age_s3, bucket_view_3)
+        
+    with tab3_sub2:
+        selected_day_3 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s3")
+        render_daily_age_profile(d_age_s3, selected_day_3)
 
     st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
     if not age_s3.empty:
