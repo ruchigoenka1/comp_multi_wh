@@ -3,6 +3,7 @@ import numpy as np
 from scipy.stats import norm
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 import math
 import io
 from collections import deque, defaultdict
@@ -22,44 +23,34 @@ def get_recommendations(demand, std_dev, lead_time, service_level):
     rop = max(0, (demand * lead_time) + safety_stock)
     return rop, safety_stock
 
-# --- Scenario 1: Single Warehouse Detailed Simulation (Vectorized Arrays & FIFO) ---
+# --- Scenario 1: Single Warehouse Detailed Simulation ---
 def simulate_single_stage_detailed(demands, rop, q, lead_time, warmup, allow_partial, track_backlogs):
     total_days = len(demands)
     
-    # Vectorized Array Pre-allocation for speed
-    opening_bal = np.zeros(total_days)
-    order_recv = np.zeros(total_days)
-    avail_inv = np.zeros(total_days)
-    sales_arr = np.zeros(total_days)
-    shortage_arr = np.zeros(total_days)
-    backlogs_arr = np.zeros(total_days)
-    closing_bal = np.zeros(total_days)
-    orders_given = np.zeros(total_days)
+    opening_bal = np.zeros(total_days); order_recv = np.zeros(total_days)
+    avail_inv = np.zeros(total_days); sales_arr = np.zeros(total_days)
+    shortage_arr = np.zeros(total_days); backlogs_arr = np.zeros(total_days)
+    closing_bal = np.zeros(total_days); orders_given = np.zeros(total_days)
     pipeline_arr = np.zeros(total_days)
     
     inv = rop + (q / 2)
-    pipe_qty = 0
-    backlog = 0
+    pipe_qty = 0; backlog = 0
     arrivals = np.zeros(total_days + int(lead_time) + 1)
     
-    # FIFO Tracking
-    on_hand = deque([{'qty': inv, 'order_t': -999, 'arrive_t': -999}]) # -999 = unknown age
+    on_hand = deque([{'qty': inv, 'order_t': -999, 'arrive_t': -999}])
     pipe_events = defaultdict(list)
     age_records = []
+    daily_inventory_age = []
     
-    total_dem = 0
-    total_sales = 0
-    stockout_days = 0
+    total_dem = 0; total_sales = 0; stockout_days = 0
     
     for t in range(total_days):
         opening = inv
         arr = arrivals[t]
         pipe_qty -= arr
         
-        # Process arrivals into FIFO queue
         if t in pipe_events:
-            for batch in pipe_events[t]:
-                on_hand.append(batch)
+            for batch in pipe_events[t]: on_hand.append(batch)
         
         fill_old = 0
         if track_backlogs and backlog > 0:
@@ -74,30 +65,22 @@ def simulate_single_stage_detailed(demands, rop, q, lead_time, warmup, allow_par
         avail = inv + arr_for_today
         dem = demands[t]
         
-        sales = 0
-        shortage = 0
+        sales = 0; shortage = 0
         if allow_partial:
-            sales = min(avail, dem)
-            shortage = dem - sales
-            inv = avail - sales
+            sales = min(avail, dem); shortage = dem - sales; inv = avail - sales
             if track_backlogs: backlog += shortage
         else:
             if avail >= dem:
-                sales = dem
-                shortage = 0
-                inv = avail - dem
+                sales = dem; shortage = 0; inv = avail - dem
             else:
-                sales = 0
-                shortage = dem
-                inv = avail
+                sales = 0; shortage = dem; inv = avail
                 if track_backlogs: backlog += shortage
                 
-        # FIFO Fulfillment Tracking (Old backlogs + New Sales)
         units_to_ship = fill_old + sales
         while units_to_ship > 0 and on_hand:
             batch = on_hand.popleft()
             if batch['qty'] <= units_to_ship:
-                if batch['order_t'] >= 0: # Only track known ages
+                if batch['order_t'] >= 0: 
                     age_records.append({'Qty': batch['qty'], 'Pipeline Time': batch['arrive_t'] - batch['order_t'], 'Warehouse Time': t - batch['arrive_t']})
                 units_to_ship -= batch['qty']
             else:
@@ -107,50 +90,47 @@ def simulate_single_stage_detailed(demands, rop, q, lead_time, warmup, allow_par
                 units_to_ship = 0
                 
         if t >= warmup:
-            total_dem += dem
-            total_sales += sales
+            total_dem += dem; total_sales += sales
             if sales < dem: stockout_days += 1
+            
+            # Daily Snapshot for Age Graph
+            day_val = t - warmup + 1
+            for b in on_hand:
+                if b['order_t'] >= 0:
+                    daily_inventory_age.append({'Day': day_val, 'Location': 'Central On-Hand', 'Age': t - b['order_t'], 'Qty': b['qty']})
+            for arr_day, batches in pipe_events.items():
+                if arr_day > t: 
+                    for b in batches:
+                        if 0 <= b['order_t'] <= t:
+                            daily_inventory_age.append({'Day': day_val, 'Location': 'Supplier Pipeline', 'Age': t - b['order_t'], 'Qty': b['qty']})
             
         order_given = 0
         if (inv + pipe_qty - backlog) <= rop:
             order_given = q
-            arrivals[t + int(lead_time)] += q
-            pipe_qty += q
+            arrivals[t + int(lead_time)] += q; pipe_qty += q
             pipe_events[t + int(lead_time)].append({'qty': q, 'order_t': t, 'arrive_t': t + int(lead_time)})
             
-        # Write to Vectorized Arrays
-        opening_bal[t] = opening
-        order_recv[t] = arr
-        avail_inv[t] = opening + arr
-        sales_arr[t] = sales
-        shortage_arr[t] = shortage
-        backlogs_arr[t] = backlog
-        closing_bal[t] = inv
-        orders_given[t] = order_given
-        pipeline_arr[t] = pipe_qty
+        opening_bal[t] = opening; order_recv[t] = arr; avail_inv[t] = opening + arr
+        sales_arr[t] = sales; shortage_arr[t] = shortage; backlogs_arr[t] = backlog
+        closing_bal[t] = inv; orders_given[t] = order_given; pipeline_arr[t] = pipe_qty
 
-    # Slice off the warmup period
     df = pd.DataFrame({
-        "Day": np.arange(1, total_days - warmup + 1),
-        "Opening Balance": opening_bal[warmup:], "Order Received": order_recv[warmup:],
-        "Available Inv": avail_inv[warmup:], "Demand": demands[warmup:], "Sales": sales_arr[warmup:],
-        "Shortage": shortage_arr[warmup:], "Backlogs": backlogs_arr[warmup:], "Closing Balance": closing_bal[warmup:],
-        "Orders Given": orders_given[warmup:], "Pipeline Inventory": pipeline_arr[warmup:]
+        "Day": np.arange(1, total_days - warmup + 1), "Opening Balance": opening_bal[warmup:], "Order Received": order_recv[warmup:],
+        "Available Inv": avail_inv[warmup:], "Demand": demands[warmup:], "Sales": sales_arr[warmup:], "Shortage": shortage_arr[warmup:], 
+        "Backlogs": backlogs_arr[warmup:], "Closing Balance": closing_bal[warmup:], "Orders Given": orders_given[warmup:], "Pipeline Inventory": pipeline_arr[warmup:]
     })
     
     vol_fr = total_sales / total_dem if total_dem > 0 else 1.0
     csl = 1 - (stockout_days / (total_days - warmup))
-    return df, vol_fr, csl, pd.DataFrame(age_records)
+    return df, vol_fr, csl, pd.DataFrame(age_records), pd.DataFrame(daily_inventory_age)
 
-# --- Scenario 2 & 3: Two-Stage Detailed Simulation (Vectorized Arrays & FIFO) ---
+# --- Scenario 2 & 3: Two-Stage Detailed Simulation ---
 def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_q, main_lt, warmup, sec_allow_partial, sec_track_backlogs, main_allow_partial, main_track_backlogs, strategy="installation"):
     total_days = len(demands)
     
-    # Vectorized Allocations
     s_opening = np.zeros(total_days); s_recv = np.zeros(total_days); s_avail = np.zeros(total_days)
     s_sales = np.zeros(total_days); s_short = np.zeros(total_days); s_back = np.zeros(total_days)
-    s_close = np.zeros(total_days); s_order = np.zeros(total_days); s_pipe = np.zeros(total_days)
-    s_sup_short = np.zeros(total_days)
+    s_close = np.zeros(total_days); s_order = np.zeros(total_days); s_pipe = np.zeros(total_days); s_sup_short = np.zeros(total_days)
     
     m_opening = np.zeros(total_days); m_recv = np.zeros(total_days); m_avail = np.zeros(total_days)
     m_sales = np.zeros(total_days); m_short = np.zeros(total_days); m_back = np.zeros(total_days)
@@ -162,24 +142,22 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
     main_arrivals = np.zeros(total_days + int(main_lt) + 1)
     sec_arrivals = np.zeros(total_days + int(sec_lt) + 1)
     
-    # FIFO Tracking
     main_on_hand = deque([{'qty': main_inv, 'order_t': -999, 'main_arr_t': -999}])
     sec_on_hand = deque([{'qty': sec_inv, 'order_t': -999, 'main_arr_t': -999, 'main_ship_t': -999, 'sec_arr_t': -999}])
     
     main_pipe_events = defaultdict(list)
     sec_pipe_events = defaultdict(list)
     age_records = []
+    daily_inventory_age = []
     
     total_dem = 0; total_sales = 0; stockout_days = 0; main_delay_days = 0
 
     for t in range(total_days):
         ship_old = 0; ship_now = 0
         
-        # 1. MAIN WAREHOUSE (HUB)
         m_opening[t] = main_inv
         m_arr = main_arrivals[t]
-        main_inv += m_arr
-        main_pipe_qty -= m_arr
+        main_inv += m_arr; main_pipe_qty -= m_arr
         
         if t in main_pipe_events:
             for b in main_pipe_events[t]: main_on_hand.append(b)
@@ -187,12 +165,9 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
         if main_track_backlogs and main_backlog_to_sec > 0 and main_inv > 0:
             if main_allow_partial: ship_old = min(main_backlog_to_sec, main_inv)
             else: ship_old = main_backlog_to_sec if main_inv >= main_backlog_to_sec else 0
-            main_inv -= ship_old
-            main_backlog_to_sec -= ship_old
-            sec_arrivals[t + int(sec_lt)] += ship_old
-            sec_pipe_qty += ship_old
+            main_inv -= ship_old; main_backlog_to_sec -= ship_old
+            sec_arrivals[t + int(sec_lt)] += ship_old; sec_pipe_qty += ship_old
             
-            # FIFO Main -> Sec
             u_to_ship = ship_old
             while u_to_ship > 0 and main_on_hand:
                 b = main_on_hand.popleft()
@@ -206,7 +181,6 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
         elif not main_track_backlogs:
             main_backlog_to_sec = 0
 
-        # 2. SECONDARY WAREHOUSE (FRONT-LINE)
         s_opening[t] = sec_inv
         s_arr = sec_arrivals[t]
         sec_pipe_qty -= s_arr
@@ -218,8 +192,7 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
         if sec_track_backlogs and sec_backlog > 0:
             if sec_allow_partial: fill_old = min(s_arr, sec_backlog)
             else: fill_old = sec_backlog if s_arr >= sec_backlog else 0
-            sec_backlog -= fill_old
-            s_arr_for_today = s_arr - fill_old
+            sec_backlog -= fill_old; s_arr_for_today = s_arr - fill_old
         else:
             s_arr_for_today = s_arr
             if not sec_track_backlogs: sec_backlog = 0
@@ -229,9 +202,7 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
         
         sales = 0; shortage = 0
         if sec_allow_partial:
-            sales = min(avail, dem)
-            shortage = dem - sales
-            sec_inv = avail - sales
+            sales = min(avail, dem); shortage = dem - sales; sec_inv = avail - sales
             if sec_track_backlogs: sec_backlog += shortage
         else:
             if avail >= dem:
@@ -240,56 +211,52 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
                 sales = 0; shortage = dem; sec_inv = avail
                 if sec_track_backlogs: sec_backlog += shortage
                 
-        # FIFO Fulfillment to Customer
         units_sold = fill_old + sales
         while units_sold > 0 and sec_on_hand:
             b = sec_on_hand.popleft()
             if b['qty'] <= units_sold:
                 if b['order_t'] >= 0:
-                    age_records.append({
-                        'Qty': b['qty'], 
-                        'Main Pipeline Time': b['main_arr_t'] - b['order_t'],
-                        'Main Warehouse Time': b['main_ship_t'] - b['main_arr_t'],
-                        'Sec Pipeline Time': b['sec_arr_t'] - b['main_ship_t'],
-                        'Sec Warehouse Time': t - b['sec_arr_t']
-                    })
+                    age_records.append({'Qty': b['qty'], 'Main Pipeline Time': b['main_arr_t'] - b['order_t'], 'Main Warehouse Time': b['main_ship_t'] - b['main_arr_t'], 'Sec Pipeline Time': b['sec_arr_t'] - b['main_ship_t'], 'Sec Warehouse Time': t - b['sec_arr_t']})
                 units_sold -= b['qty']
             else:
                 if b['order_t'] >= 0:
-                    age_records.append({
-                        'Qty': units_sold, 
-                        'Main Pipeline Time': b['main_arr_t'] - b['order_t'],
-                        'Main Warehouse Time': b['main_ship_t'] - b['main_arr_t'],
-                        'Sec Pipeline Time': b['sec_arr_t'] - b['main_ship_t'],
-                        'Sec Warehouse Time': t - b['sec_arr_t']
-                    })
+                    age_records.append({'Qty': units_sold, 'Main Pipeline Time': b['main_arr_t'] - b['order_t'], 'Main Warehouse Time': b['main_ship_t'] - b['main_arr_t'], 'Sec Pipeline Time': b['sec_arr_t'] - b['main_ship_t'], 'Sec Warehouse Time': t - b['sec_arr_t']})
                 sec_on_hand.appendleft({'qty': b['qty'] - units_sold, 'order_t': b['order_t'], 'main_arr_t': b['main_arr_t'], 'main_ship_t': b['main_ship_t'], 'sec_arr_t': b['sec_arr_t']})
                 units_sold = 0
 
         delayed_by_main = (sec_inv == 0) and (main_backlog_to_sec > 0) and (sales < dem)
 
         if t >= warmup:
-            total_dem += dem
-            total_sales += sales
+            total_dem += dem; total_sales += sales
             if sales < dem: stockout_days += 1
             if delayed_by_main: main_delay_days += 1
+            
+            # Daily Snapshot for Age Graph
+            day_val = t - warmup + 1
+            for b in main_on_hand:
+                if b['order_t'] >= 0: daily_inventory_age.append({'Day': day_val, 'Location': 'Main On-Hand', 'Age': t - b['order_t'], 'Qty': b['qty']})
+            for arr_day, batches in main_pipe_events.items():
+                if arr_day > t:
+                    for b in batches:
+                        if 0 <= b['order_t'] <= t: daily_inventory_age.append({'Day': day_val, 'Location': 'Main Pipeline', 'Age': t - b['order_t'], 'Qty': b['qty']})
+            for b in sec_on_hand:
+                if b['order_t'] >= 0: daily_inventory_age.append({'Day': day_val, 'Location': 'Sec On-Hand', 'Age': t - b['order_t'], 'Qty': b['qty']})
+            for arr_day, batches in sec_pipe_events.items():
+                if arr_day > t:
+                    for b in batches:
+                        if 0 <= b['order_t'] <= t: daily_inventory_age.append({'Day': day_val, 'Location': 'Sec Pipeline', 'Age': t - b['order_t'], 'Qty': b['qty']})
 
-        # 3. REORDER TRIGGERS
         sec_pos = sec_inv + sec_pipe_qty + main_backlog_to_sec - sec_backlog
-        sec_order_given = 0
-        shortage_from_supplier = 0 
+        sec_order_given = 0; shortage_from_supplier = 0 
         
         if sec_pos <= sec_rop:
             sec_order_given = sec_q
             if main_allow_partial: ship_now = min(main_inv, sec_q)
             else: ship_now = sec_q if main_inv >= sec_q else 0
-            main_inv -= ship_now
-            shortage_from_supplier = sec_q - ship_now
+            main_inv -= ship_now; shortage_from_supplier = sec_q - ship_now
             if main_track_backlogs: main_backlog_to_sec += shortage_from_supplier
-            sec_arrivals[t + int(sec_lt)] += ship_now
-            sec_pipe_qty += ship_now
+            sec_arrivals[t + int(sec_lt)] += ship_now; sec_pipe_qty += ship_now
             
-            # FIFO Main -> Sec (immediate ship)
             u_to_ship = ship_now
             while u_to_ship > 0 and main_on_hand:
                 b = main_on_hand.popleft()
@@ -305,12 +272,9 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
         main_order_given = 0
         
         if pos <= main_rop:
-            main_order_given = main_q
-            main_arrivals[t + int(main_lt)] += main_q
-            main_pipe_qty += main_q
+            main_order_given = main_q; main_arrivals[t + int(main_lt)] += main_q; main_pipe_qty += main_q
             main_pipe_events[t + int(main_lt)].append({'qty': main_q, 'order_t': t, 'main_arr_t': t + int(main_lt)})
             
-        # Write to Arrays
         s_recv[t] = s_arr; s_avail[t] = s_opening[t] + s_arr; s_sales[t] = sales; s_short[t] = shortage
         s_back[t] = sec_backlog; s_close[t] = sec_inv; s_order[t] = sec_order_given; s_sup_short[t] = shortage_from_supplier; s_pipe[t] = sec_pipe_qty
         
@@ -333,7 +297,7 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
     
     vol_fr = total_sales / total_dem if total_dem > 0 else 1.0
     csl = 1 - (stockout_days / (total_days - warmup))
-    return df_sec, df_main, vol_fr, csl, main_delay_days, pd.DataFrame(age_records)
+    return df_sec, df_main, vol_fr, csl, main_delay_days, pd.DataFrame(age_records), pd.DataFrame(daily_inventory_age)
 
 # --- Plotly Helper Functions ---
 def render_interactive_chart(df, y_cols):
@@ -348,7 +312,6 @@ def render_interactive_chart(df, y_cols):
     fig.update_xaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
     st.plotly_chart(fig, use_container_width=True)
 
-# --- Plotly Helper Functions ---
 def render_age_histogram(df_age, cols):
     fig = go.Figure()
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
@@ -358,19 +321,30 @@ def render_age_histogram(df_age, cols):
             x=df_age[col], y=df_age['Qty'], histfunc='sum', name=col, 
             marker_color=colors[i % len(colors)], opacity=0.75, xbins=dict(size=1)
         ))
-        
-    fig.update_layout(
-        barmode='overlay', 
-        xaxis_title="Days Spent", 
-        yaxis_title="Units (Qty)", 
-        margin=dict(l=0, r=0, t=30, b=80),  # Increased bottom margin to make room
-        plot_bgcolor='rgba(0,0,0,0)', 
-        # FIX: Moved legend to the bottom center, away from the hover toolbar
-        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5) 
-    )
-    
+    fig.update_layout(barmode='overlay', xaxis_title="Days Spent", yaxis_title="Units (Qty)", margin=dict(l=0, r=0, t=30, b=80), plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5))
     fig.update_yaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)', zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
     fig.update_xaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_daily_age_profile(df_snapshots, selected_day):
+    day_df = df_snapshots[df_snapshots['Day'] == selected_day].copy()
+    if day_df.empty:
+        st.info("No age data available for this day. (Units may belong to initial warmup stock with unknown origins).")
+        return
+    
+    # Create an "Overall System" category
+    overall_df = day_df.copy()
+    overall_df['Location'] = 'Overall System'
+    combined_df = pd.concat([day_df, overall_df])
+    grouped = combined_df.groupby(['Location', 'Age'])['Qty'].sum().reset_index()
+    
+    # Bar Chart with diverging color map (Red=Old, Blue=New)
+    fig = px.bar(grouped, x="Location", y="Qty", color="Age",
+                 color_continuous_scale='RdYlBu_r', 
+                 title=f"Inventory Age Profile on Day {selected_day} (System Age)",
+                 labels={"Qty": "Total Units", "Age": "System Age (Days since ordered)"})
+    
+    fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', barmode='stack', margin=dict(l=0, r=0, t=40, b=0))
     st.plotly_chart(fig, use_container_width=True)
 
 # --- App Configuration & State ---
@@ -389,7 +363,6 @@ global_std = col_g4.number_input("Global Demand Std Dev", min_value=0.0, value=2
 
 total_sim_days = int(warmup_days + sim_days)
 
-# Session State for Demands
 if 'demand_array' not in st.session_state or 'sim_params' not in st.session_state or st.session_state.sim_params != (total_sim_days, global_dem, global_std):
     st.session_state.demand_array = np.maximum(0, np.random.normal(global_dem, global_std, total_sim_days)).astype(int)
     st.session_state.sim_params = (total_sim_days, global_dem, global_std)
@@ -426,7 +399,7 @@ with tab1:
     s1_track_backlogs = s1_col2.checkbox("Track Backlogs", value=True, key="s1_backlog", help="Unmet demand goes into a backlog queue instead of being permanently lost.")
     
     st.markdown("---")
-    df_s1, vol_fr_1, csl_1, age_s1 = simulate_single_stage_detailed(st.session_state.demand_array, s1_actual_rop, s1_q, s1_lead_time, warmup_days, s1_allow_partial, s1_track_backlogs)
+    df_s1, vol_fr_1, csl_1, age_s1, d_age_s1 = simulate_single_stage_detailed(st.session_state.demand_array, s1_actual_rop, s1_q, s1_lead_time, warmup_days, s1_allow_partial, s1_track_backlogs)
 
     s1_avg_oh = df_s1['Closing Balance'].mean(); s1_avg_pipe = df_s1['Pipeline Inventory'].mean()
     s1_sim_wc = (s1_avg_oh * s1_cost) + (s1_avg_pipe * s1_pipeline_cost)
@@ -442,7 +415,11 @@ with tab1:
     plot_df1 = pd.DataFrame({'Day': df_s1['Day'], 'On-Hand Inventory': df_s1['Closing Balance'], 'Pipeline Inventory': df_s1['Pipeline Inventory'], 'Backlogged Orders': df_s1['Backlogs'], 'ROP Limit': s1_actual_rop})
     render_interactive_chart(plot_df1, ['On-Hand Inventory', 'Pipeline Inventory', 'Backlogged Orders', 'ROP Limit'])
     
-    st.markdown("### ⏳ Age of Inventory (FIFO Analytics)")
+    st.markdown("### 📊 Daily Age Profile (FIFO)")
+    selected_day_1 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s1")
+    render_daily_age_profile(d_age_s1, selected_day_1)
+
+    st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
     if not age_s1.empty:
         age_s1['Total Time'] = age_s1['Pipeline Time'] + age_s1['Warehouse Time']
         a1, a2, a3 = st.columns(3)
@@ -453,7 +430,6 @@ with tab1:
     else:
         st.info("Not enough units sold after the warmup period to calculate age.")
         
-    # Financial Valuation Tables for Tab 1
     st.markdown("### 💰 Average Inventory & Valuation Summary")
     val_data_1a = {
         "Asset Location / State": ["Central Warehouse (On-Hand)", "Pipeline (Supplier → Central)"],
@@ -513,7 +489,7 @@ with tab2:
     s2_main_track_backlogs = c3i.checkbox("Track Backlogs", value=True, key="s2_main_backlog")
 
     st.markdown("---")
-    df_sec_s2, df_main_s2, vol_fr_2, csl_2, delay_2, age_s2 = simulate_two_stage_detailed(st.session_state.demand_array, s2_sec_actual_rop, s2_sec_q, s2_sec_lt, s2_main_actual_rop, s2_main_q, s2_main_lt, warmup_days, s2_sec_allow_partial, s2_sec_track_backlogs, s2_main_allow_partial, s2_main_track_backlogs, "installation")
+    df_sec_s2, df_main_s2, vol_fr_2, csl_2, delay_2, age_s2, d_age_s2 = simulate_two_stage_detailed(st.session_state.demand_array, s2_sec_actual_rop, s2_sec_q, s2_sec_lt, s2_main_actual_rop, s2_main_q, s2_main_lt, warmup_days, s2_sec_allow_partial, s2_sec_track_backlogs, s2_main_allow_partial, s2_main_track_backlogs, "installation")
     
     avg_sec_oh_2 = df_sec_s2['Closing Balance'].mean(); avg_sec_pipe_2 = df_sec_s2['Pipeline Inventory'].mean()
     avg_main_oh_2 = df_main_s2['Closing Balance'].mean(); avg_main_pipe_2 = df_main_s2['Pipeline Inventory'].mean()
@@ -529,7 +505,11 @@ with tab2:
     plot_df2 = pd.DataFrame({'Day': df_sec_s2['Day'], 'Sec On-Hand': df_sec_s2['Closing Balance'], 'Sec Pipeline': df_sec_s2['Pipeline Inventory'], 'Sec Backlogged': df_sec_s2['Backlogs'], 'Main On-Hand': df_main_s2['Closing Balance'], 'Main Pipeline': df_main_s2['Pipeline Inventory']})
     render_interactive_chart(plot_df2, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
     
-    st.markdown("### ⏳ Age of Inventory (FIFO Analytics)")
+    st.markdown("### 📊 Daily Age Profile (FIFO)")
+    selected_day_2 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s2")
+    render_daily_age_profile(d_age_s2, selected_day_2)
+
+    st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
     if not age_s2.empty:
         age_s2['Total Time'] = age_s2['Main Pipeline Time'] + age_s2['Main Warehouse Time'] + age_s2['Sec Pipeline Time'] + age_s2['Sec Warehouse Time']
         a1, a2, a3, a4, a5 = st.columns(5)
@@ -594,7 +574,7 @@ with tab3:
     s3_main_track_backlogs = c5i.checkbox("Track Backlogs", value=True, key="s3_main_backlog")
 
     st.markdown("---")
-    df_sec_s3, df_main_s3, vol_fr_3, csl_3, delay_3, age_s3 = simulate_two_stage_detailed(st.session_state.demand_array, s3_sec_actual_rop, s3_sec_q, s3_sec_lt, s3_echelon_actual_rop, s3_main_q, s3_main_lt, warmup_days, s3_sec_allow_partial, s3_sec_track_backlogs, s3_main_allow_partial, s3_main_track_backlogs, "echelon")
+    df_sec_s3, df_main_s3, vol_fr_3, csl_3, delay_3, age_s3, d_age_s3 = simulate_two_stage_detailed(st.session_state.demand_array, s3_sec_actual_rop, s3_sec_q, s3_sec_lt, s3_echelon_actual_rop, s3_main_q, s3_main_lt, warmup_days, s3_sec_allow_partial, s3_sec_track_backlogs, s3_main_allow_partial, s3_main_track_backlogs, "echelon")
     
     avg_sec_oh_3 = df_sec_s3['Closing Balance'].mean(); avg_sec_pipe_3 = df_sec_s3['Pipeline Inventory'].mean()
     avg_main_oh_3 = df_main_s3['Closing Balance'].mean(); avg_main_pipe_3 = df_main_s3['Pipeline Inventory'].mean()
@@ -610,7 +590,11 @@ with tab3:
     plot_df3 = pd.DataFrame({'Day': df_sec_s3['Day'], 'Sec On-Hand': df_sec_s3['Closing Balance'], 'Sec Pipeline': df_sec_s3['Pipeline Inventory'], 'Sec Backlogged': df_sec_s3['Backlogs'], 'Main On-Hand': df_main_s3['Closing Balance'], 'Main Pipeline': df_main_s3['Pipeline Inventory']})
     render_interactive_chart(plot_df3, ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline'])
     
-    st.markdown("### ⏳ Age of Inventory (FIFO Analytics)")
+    st.markdown("### 📊 Daily Age Profile (FIFO)")
+    selected_day_3 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s3")
+    render_daily_age_profile(d_age_s3, selected_day_3)
+
+    st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
     if not age_s3.empty:
         age_s3['Total Time'] = age_s3['Main Pipeline Time'] + age_s3['Main Warehouse Time'] + age_s3['Sec Pipeline Time'] + age_s3['Sec Warehouse Time']
         a1, a2, a3, a4, a5 = st.columns(5)
