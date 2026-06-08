@@ -771,7 +771,16 @@ with tab4:
     for col in ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline']:
         is_pipeline = 'Pipeline' in col; is_backlog = 'Backlog' in col
         fig4.add_trace(go.Scatter(x=plot_df4['Day'], y=plot_df4[col], mode='lines', name=col, line=dict(color=color_map.get(col, '#333333'), width=2 if not is_pipeline else 3), line_shape='hv' if is_pipeline or is_backlog else 'linear', opacity=0.8 if is_pipeline else 1.0))
-    fig4.update_layout(plot_bgcolor='white', paper_bgcolor='white', xaxis_title="Day", yaxis_title="Units", hovermode="x unified", margin=dict(l=0, r=0, t=30, b=80), legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5))
+    # Change these from 'white' to 'rgba(0,0,0,0)'
+    fig4.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)', 
+        paper_bgcolor='rgba(0,0,0,0)', 
+        xaxis_title="Day", 
+        yaxis_title="Units", 
+        hovermode="x unified", 
+        margin=dict(l=0, r=0, t=30, b=80), 
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5)
+    )
     st.plotly_chart(fig4, use_container_width=True)
 
     st.markdown("### 📈 Working Capital Analysis")
