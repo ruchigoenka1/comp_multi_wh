@@ -4,6 +4,7 @@ from scipy.stats import norm
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots
 import math
 import io
 from collections import deque, defaultdict
@@ -433,6 +434,49 @@ def render_working_capital_chart_multi(df_sec, df_main, s_cost, m_cost, s_pipe_c
     fig.update_yaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)', zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
     st.plotly_chart(fig, use_container_width=True)
 
+def render_avg_age_flux_chart(df_snapshots, location_filter, df_flows):
+    if df_snapshots.empty or df_flows.empty: return
+    df = df_snapshots.copy()
+    
+    if location_filter != "Overall System":
+        df = df[df['Location'].str.contains(location_filter)]
+        
+    if df.empty:
+        st.info("No tracked inventory for this location during the period.")
+        return
+
+    # Calculate weighted average age
+    df['Age_x_Qty'] = df['Age'] * df['Qty']
+    daily_avg = df.groupby('Day').agg({'Age_x_Qty': 'sum', 'Qty': 'sum'}).reset_index()
+    daily_avg['Avg Age'] = daily_avg['Age_x_Qty'] / daily_avg['Qty']
+    
+    # Merge with flow data
+    merged = pd.merge(daily_avg, df_flows, on='Day', how='left').fillna(0)
+
+    # Dual-axis chart
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # Unit Bars (Receipts and Dispatches)
+    fig.add_trace(go.Bar(x=merged['Day'], y=merged['Order Received'], name="Receipts (In)", marker_color='#2ca02c', opacity=0.6), secondary_y=False)
+    fig.add_trace(go.Bar(x=merged['Day'], y=merged['Sales'], name="Dispatches (Out)", marker_color='#d62728', opacity=0.6), secondary_y=False)
+    
+    # Age Line
+    fig.add_trace(go.Scatter(x=merged['Day'], y=merged['Avg Age'], name="Average Age (Days)", mode='lines', line=dict(color='#1f77b4', width=3)), secondary_y=True)
+    
+    fig.update_layout(
+        title=f"Inventory Age Flux: {location_filter}",
+        plot_bgcolor='rgba(0,0,0,0)',
+        barmode='group',
+        margin=dict(l=0, r=0, t=40, b=80),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5)
+    )
+    
+    fig.update_xaxes(showgrid=False, title_text="Day", zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
+    fig.update_yaxes(title_text="Units (Qty)", showgrid=False, secondary_y=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
+    fig.update_yaxes(title_text="Average Age (Days)", showgrid=True, gridcolor='rgba(200,200,200,0.2)', secondary_y=True)
+    
+    st.plotly_chart(fig, use_container_width=True)
+
 # --- App Configuration & State ---
 st.set_page_config(page_title="Supply Chain Optimizer", layout="wide")
 st.title("📦 Supply Chain Scenario Architect")
@@ -506,13 +550,17 @@ with tab1:
     render_working_capital_chart_single(df_s1, s1_cost, s1_pipeline_cost, show_pipe_1)
     
     st.markdown("### 📊 Daily Age Profile & Aging Buckets")
-    tab1_sub1, tab1_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
+    tab1_sub1, tab1_sub2, tab1_sub3 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile", "Average Age Flux"])
     with tab1_sub1:
         bucket_view_1 = st.selectbox("Select View", ["Overall System", "Central On-Hand", "Supplier Pipeline"], key="b_s1")
         render_aging_buckets_chart(d_age_s1, bucket_view_1)
     with tab1_sub2:
         selected_day_1 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s1")
         render_daily_age_profile(d_age_s1, selected_day_1)
+    with tab1_sub3:
+        flux_view_1 = st.selectbox("Select View for Age Flux", ["Overall System", "Central On-Hand"], key="flux_s1")
+        df_flows_1 = df_s1[['Day', 'Order Received', 'Sales']]
+        render_avg_age_flux_chart(d_age_s1, flux_view_1, df_flows_1)
 
     st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
     if not age_s1.empty:
@@ -522,8 +570,6 @@ with tab1:
         a2.metric("Avg Warehouse Time", f"{(age_s1['Warehouse Time'] * age_s1['Qty']).sum() / age_s1['Qty'].sum():.1f} Days")
         a3.metric("Avg Total Age at Sale", f"{(age_s1['Total Time'] * age_s1['Qty']).sum() / age_s1['Qty'].sum():.1f} Days")
         render_age_histogram(age_s1, ['Pipeline Time', 'Warehouse Time', 'Total Time'])
-    else:
-        st.info("Not enough units sold after the warmup period to calculate age.")
 
 # ==========================================
 # TAB 2: TWO-STAGE (LOCAL ROP)
@@ -582,13 +628,22 @@ with tab2:
     render_working_capital_chart_multi(df_sec_s2, df_main_s2, s2_sec_cost, s2_main_cost, s2_sec_cost, s2_main_cost, show_pipe_2)
     
     st.markdown("### 📊 Daily Age Profile & Aging Buckets")
-    tab2_sub1, tab2_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
+    tab2_sub1, tab2_sub2, tab2_sub3 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile", "Average Age Flux"])
     with tab2_sub1:
         bucket_view_2 = st.selectbox("Select View", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="b_s2")
         render_aging_buckets_chart(d_age_s2, bucket_view_2)
     with tab2_sub2:
         selected_day_2 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s2")
         render_daily_age_profile(d_age_s2, selected_day_2)
+    with tab2_sub3:
+        flux_view_2 = st.selectbox("Select View for Age Flux", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="flux_s2")
+        if flux_view_2 == "Overall System":
+            df_flows_2 = pd.DataFrame({'Day': df_sec_s2['Day'], 'Order Received': df_main_s2['Order Received'], 'Sales': df_sec_s2['Sales']})
+        elif flux_view_2 == "Main On-Hand":
+            df_flows_2 = df_main_s2[['Day', 'Order Received', 'Sales']]
+        else:
+            df_flows_2 = df_sec_s2[['Day', 'Order Received', 'Sales']]
+        render_avg_age_flux_chart(d_age_s2, flux_view_2, df_flows_2)
 
     st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
     if not age_s2.empty:
@@ -659,13 +714,22 @@ with tab3:
     render_working_capital_chart_multi(df_sec_s3, df_main_s3, s3_sec_cost, s3_main_cost, s3_sec_cost, s3_main_cost, show_pipe_3)
     
     st.markdown("### 📊 Daily Age Profile & Aging Buckets")
-    tab3_sub1, tab3_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
+    tab3_sub1, tab3_sub2, tab3_sub3 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile", "Average Age Flux"])
     with tab3_sub1:
         bucket_view_3 = st.selectbox("Select View", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="b_s3")
         render_aging_buckets_chart(d_age_s3, bucket_view_3)
     with tab3_sub2:
         selected_day_3 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s3")
         render_daily_age_profile(d_age_s3, selected_day_3)
+    with tab3_sub3:
+        flux_view_3 = st.selectbox("Select View for Age Flux", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="flux_s3")
+        if flux_view_3 == "Overall System":
+            df_flows_3 = pd.DataFrame({'Day': df_sec_s3['Day'], 'Order Received': df_main_s3['Order Received'], 'Sales': df_sec_s3['Sales']})
+        elif flux_view_3 == "Main On-Hand":
+            df_flows_3 = df_main_s3[['Day', 'Order Received', 'Sales']]
+        else:
+            df_flows_3 = df_sec_s3[['Day', 'Order Received', 'Sales']]
+        render_avg_age_flux_chart(d_age_s3, flux_view_3, df_flows_3)
 
     st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
     if not age_s3.empty:
@@ -771,16 +835,7 @@ with tab4:
     for col in ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline']:
         is_pipeline = 'Pipeline' in col; is_backlog = 'Backlog' in col
         fig4.add_trace(go.Scatter(x=plot_df4['Day'], y=plot_df4[col], mode='lines', name=col, line=dict(color=color_map.get(col, '#333333'), width=2 if not is_pipeline else 3), line_shape='hv' if is_pipeline or is_backlog else 'linear', opacity=0.8 if is_pipeline else 1.0))
-    # Change these from 'white' to 'rgba(0,0,0,0)'
-    fig4.update_layout(
-        plot_bgcolor='rgba(0,0,0,0)', 
-        paper_bgcolor='rgba(0,0,0,0)', 
-        xaxis_title="Day", 
-        yaxis_title="Units", 
-        hovermode="x unified", 
-        margin=dict(l=0, r=0, t=30, b=80), 
-        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5)
-    )
+    fig4.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis_title="Day", yaxis_title="Units", hovermode="x unified", margin=dict(l=0, r=0, t=30, b=80), legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5))
     st.plotly_chart(fig4, use_container_width=True)
 
     st.markdown("### 📈 Working Capital Analysis")
@@ -788,13 +843,22 @@ with tab4:
     render_working_capital_chart_multi(df_sec_s4, df_main_s4, s4_sec_cost, s4_main_cost, s4_sec_cost, s4_main_cost, show_pipe_4)
     
     st.markdown("### 📊 Daily Age Profile & Aging Buckets")
-    tab4_sub1, tab4_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
+    tab4_sub1, tab4_sub2, tab4_sub3 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile", "Average Age Flux"])
     with tab4_sub1:
         bucket_view_4 = st.selectbox("Select View", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="b_s4")
         render_aging_buckets_chart(d_age_s4, bucket_view_4)
     with tab4_sub2:
         selected_day_4 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s4")
         render_daily_age_profile(d_age_s4, selected_day_4)
+    with tab4_sub3:
+        flux_view_4 = st.selectbox("Select View for Age Flux", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="flux_s4")
+        if flux_view_4 == "Overall System":
+            df_flows_4 = pd.DataFrame({'Day': df_sec_s4['Day'], 'Order Received': df_main_s4['Order Received'], 'Sales': df_sec_s4['Sales']})
+        elif flux_view_4 == "Main On-Hand":
+            df_flows_4 = df_main_s4[['Day', 'Order Received', 'Sales']]
+        else:
+            df_flows_4 = df_sec_s4[['Day', 'Order Received', 'Sales']]
+        render_avg_age_flux_chart(d_age_s4, flux_view_4, df_flows_4)
 
     st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
     if not age_s4.empty:
@@ -814,10 +878,10 @@ st.markdown("---")
 st.header("📋 Master Comparison Summary")
 comparison_data = {
     "Metric": ["Target Fill Rate", "Order Qty (Q)", "Suggested ROP", "Actual Set ROP", "Avg Working Capital", "Peak Working Capital", "Total Sales (Units)", "Stockout Days"],
-    "S1: Central": [f"{s1_service_level*100:.1f}%", f"{s1_q:,.0f}", f"{rec_s1_rop:,.0f}", f"{s1_actual_rop:,.0f}", f"${s1_sim_wc:,.0f}", f"${s1_peak_wc:,.0f}", f"{tot_sales_1:,.0f}", "N/A"],
-    "S2: Secondary": [f"{s2_sec_sl*100:.1f}%", f"{s2_sec_q:,.0f}", f"{rec_sec_rop:,.0f}", f"{s2_sec_actual_rop:,.0f}", f"${(avg_sec_oh_2+avg_sec_pipe_2)*s2_sec_cost:,.0f}", f"${peak_sys_val_2:,.0f} (System)", f"{tot_sales_2:,.0f}", "—"],
+    "S1: Central": [f"{s1_service_level*100:.1f}%", f"{s1_q:,.0f}", f"{rec_s1_rop:,.0f}", f"{s1_actual_rop:,.0f}", f"${s1_sim_wc:,.0f}", f"${s1_peak_wc:,.0f}", f"{t_sales_1:,.0f}", "N/A"],
+    "S2: Secondary": [f"{s2_sec_sl*100:.1f}%", f"{s2_sec_q:,.0f}", f"{rec_sec_rop:,.0f}", f"{s2_sec_actual_rop:,.0f}", f"${(avg_sec_oh_2+avg_sec_pipe_2)*s2_sec_cost:,.0f}", f"${peak_sys_val_2:,.0f} (System)", f"{t_sales_2:,.0f}", "—"],
     "S2: Main": [f"{s2_main_sl*100:.1f}%", f"{s2_main_q:,.0f}", f"{rec_main_rop:,.0f}", f"{s2_main_actual_rop:,.0f}", f"${(avg_main_oh_2+avg_main_pipe_2)*s2_main_cost:,.0f}", "—", "—", f"{delay_2}"],
-    "S3: Secondary": [f"{s3_sec_sl*100:.1f}%", f"{s3_sec_q:,.0f}", f"{rec_s3_sec_rop:,.0f}", f"{s3_sec_actual_rop:,.0f}", f"${(avg_sec_oh_3+avg_sec_pipe_3)*s3_sec_cost:,.0f}", f"${peak_sys_val_3:,.0f} (System)", f"{tot_sales_3:,.0f}", "—"],
+    "S3: Secondary": [f"{s3_sec_sl*100:.1f}%", f"{s3_sec_q:,.0f}", f"{rec_s3_sec_rop:,.0f}", f"{s3_sec_actual_rop:,.0f}", f"${(avg_sec_oh_3+avg_sec_pipe_3)*s3_sec_cost:,.0f}", f"${peak_sys_val_3:,.0f} (System)", f"{t_sales_3:,.0f}", "—"],
     "S3: Main (Echelon)": [f"{s3_main_sl*100:.1f}%", f"{s3_main_q:,.0f}", f"{rec_echelon_rop:,.0f}", f"{s3_echelon_actual_rop:,.0f}", f"${(avg_main_oh_3+avg_main_pipe_3)*s3_main_cost:,.0f}", "—", "—", f"{delay_3}"],
     "S4: Sec. Policy Test": [f"{s4_sec_sl*100:.1f}%", f"{s4_sec_q:,.0f}", f"{rec_s4_sec_rop:,.0f}", f"{s4_sec_actual_rop:,.0f}", f"${(avg_sec_oh_4+avg_sec_pipe_4)*s4_sec_cost:,.0f}", f"${peak_sys_val_4:,.0f} (System)", f"{t_sales_4:,.0f}", "—"],
     "S4: Main Policy Test": [f"{s4_main_sl*100:.1f}%", f"{s4_main_q:,.0f}", f"{rec_echelon_rop if s4_main_policy == 'Continuous (s, Q)' else rec_echelon_s:,.0f}", f"{s4_echelon_actual_rop if s4_main_policy == 'Continuous (s, Q)' else s4_main_s:,.0f}", f"${(avg_main_oh_4+avg_main_pipe_4)*s4_main_cost:,.0f}", "—", "—", f"{delay_4}"]
