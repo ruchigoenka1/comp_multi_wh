@@ -348,13 +348,27 @@ def render_interactive_chart(df, y_cols):
     fig.update_xaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
     st.plotly_chart(fig, use_container_width=True)
 
+# --- Plotly Helper Functions ---
 def render_age_histogram(df_age, cols):
     fig = go.Figure()
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
     for i, col in enumerate(cols):
         if col not in df_age.columns: continue
-        fig.add_trace(go.Histogram(x=df_age[col], y=df_age['Qty'], histfunc='sum', name=col, marker_color=colors[i % len(colors)], opacity=0.75, xbins=dict(size=1)))
-    fig.update_layout(barmode='overlay', xaxis_title="Days Spent", yaxis_title="Units (Qty)", margin=dict(l=0, r=0, t=30, b=0), plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        fig.add_trace(go.Histogram(
+            x=df_age[col], y=df_age['Qty'], histfunc='sum', name=col, 
+            marker_color=colors[i % len(colors)], opacity=0.75, xbins=dict(size=1)
+        ))
+        
+    fig.update_layout(
+        barmode='overlay', 
+        xaxis_title="Days Spent", 
+        yaxis_title="Units (Qty)", 
+        margin=dict(l=0, r=0, t=30, b=80),  # Increased bottom margin to make room
+        plot_bgcolor='rgba(0,0,0,0)', 
+        # FIX: Moved legend to the bottom center, away from the hover toolbar
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5) 
+    )
+    
     fig.update_yaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)', zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
     fig.update_xaxes(showgrid=False, zeroline=True, zerolinecolor='rgba(200,200,200,0.5)')
     st.plotly_chart(fig, use_container_width=True)
