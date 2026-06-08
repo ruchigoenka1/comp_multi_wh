@@ -16,12 +16,21 @@ def convert_df_to_excel(df):
     return output.getvalue()
 
 # --- Core Financial Calculations ---
+# --- Core Financial Calculations ---
 def get_recommendations(demand, std_dev, lead_time, service_level):
     if lead_time <= 0: return 0, 0
     z_score = norm.ppf(service_level)
     safety_stock = max(0, z_score * std_dev * math.sqrt(lead_time))
     rop = max(0, (demand * lead_time) + safety_stock)
     return rop, safety_stock
+
+def get_periodic_recommendations(demand, std_dev, lead_time, review_period, service_level):
+    if lead_time < 0 or review_period <= 0: return 0, 0
+    z_score = norm.ppf(service_level)
+    risk_period = lead_time + review_period
+    safety_stock = max(0, z_score * std_dev * math.sqrt(risk_period))
+    target_level = max(0, (demand * risk_period) + safety_stock)
+    return target_level, safety_stock
 
 # --- Scenario 1: Single Warehouse Detailed Simulation ---
 def simulate_single_stage_detailed(demands, rop, q, lead_time, warmup, allow_partial, track_backlogs):
@@ -33,7 +42,8 @@ def simulate_single_stage_detailed(demands, rop, q, lead_time, warmup, allow_par
     closing_bal = np.zeros(total_days); orders_given = np.zeros(total_days)
     pipeline_arr = np.zeros(total_days)
     
-    inv = rop + (q / 2)
+    # Updated: Opening balance is 1.25 * production trigger point
+    inv = rop * 1.25
     pipe_qty = 0; backlog = 0
     arrivals = np.zeros(total_days + int(lead_time) + 1)
     
@@ -121,10 +131,16 @@ def simulate_single_stage_detailed(demands, rop, q, lead_time, warmup, allow_par
     
     vol_fr = total_sales / total_dem if total_dem > 0 else 1.0
     csl = 1 - (stockout_days / (total_days - warmup))
-    return df, vol_fr, csl, pd.DataFrame(age_records), pd.DataFrame(daily_inventory_age)
+    return df, vol_fr, csl, pd.DataFrame(age_records), pd.DataFrame(daily_inventory_age), total_sales, total_dem, stockout_days
 
-# --- Scenario 2 & 3: Two-Stage Detailed Simulation ---
-def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_q, main_lt, warmup, sec_allow_partial, sec_track_backlogs, main_allow_partial, main_track_backlogs, strategy="installation"):
+# --- Scenario 2, 3 & 4: Multi-Stage Detailed Simulation ---
+def simulate_two_stage_detailed(
+    demands, sec_rop, sec_q, sec_lt, main_rop, main_q, main_lt, warmup, 
+    sec_allow_partial, sec_track_backlogs, main_allow_partial, main_track_backlogs, 
+    strategy="installation",
+    sec_policy="continuous", sec_r=1, sec_s=0,
+    main_policy="continuous", main_r=1, main_s=0
+):
     total_days = len(demands)
     
     s_opening = np.zeros(total_days); s_recv = np.zeros(total_days); s_avail = np.zeros(total_days)
@@ -135,7 +151,10 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
     m_sales = np.zeros(total_days); m_short = np.zeros(total_days); m_back = np.zeros(total_days)
     m_close = np.zeros(total_days); m_order = np.zeros(total_days); m_pipe = np.zeros(total_days)
 
-    main_inv, sec_inv = main_rop + main_q, sec_rop + sec_q
+    # Updated: Opening balance is 1.25 * production trigger point (ROP or Target Level)
+    main_inv = (main_rop * 1.25) if main_policy == "continuous" else (main_s * 1.25)
+    sec_inv = (sec_rop * 1.25) if sec_policy == "continuous" else (sec_s * 1.25)
+    
     main_pipe_qty, sec_pipe_qty = 0, 0
     main_backlog_to_sec, sec_backlog = 0, 0
     main_arrivals = np.zeros(total_days + int(main_lt) + 1)
@@ -244,14 +263,26 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
                     for b in batches:
                         if 0 <= b['order_t'] <= t: daily_inventory_age.append({'Day': day_val, 'Location': 'Sec Pipeline', 'Age': t - b['order_t'], 'Qty': b['qty']})
 
+        # --- REORDER TRIGGERS ---
         sec_pos = sec_inv + sec_pipe_qty + main_backlog_to_sec - sec_backlog
         sec_order_given = 0; shortage_from_supplier = 0 
+        sec_trigger_action = False
         
-        if sec_pos <= sec_rop:
-            sec_order_given = sec_q
-            if main_allow_partial: ship_now = min(main_inv, sec_q)
-            else: ship_now = sec_q if main_inv >= sec_q else 0
-            main_inv -= ship_now; shortage_from_supplier = sec_q - ship_now
+        if sec_policy == "continuous":
+            if sec_pos <= sec_rop:
+                sec_trigger_action = True
+                sec_order_qty_eval = sec_q
+        elif sec_policy == "periodic":
+            if t % sec_r == 0: # Review interval hit
+                if sec_pos < sec_s:
+                    sec_trigger_action = True
+                    sec_order_qty_eval = sec_s - sec_pos
+        
+        if sec_trigger_action:
+            sec_order_given = sec_order_qty_eval
+            if main_allow_partial: ship_now = min(main_inv, sec_order_qty_eval)
+            else: ship_now = sec_order_qty_eval if main_inv >= sec_order_qty_eval else 0
+            main_inv -= ship_now; shortage_from_supplier = sec_order_qty_eval - ship_now
             if main_track_backlogs: main_backlog_to_sec += shortage_from_supplier
             sec_arrivals[t + int(sec_lt)] += ship_now; sec_pipe_qty += ship_now
             
@@ -268,10 +299,23 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
 
         pos = (main_inv + sec_inv + main_pipe_qty + sec_pipe_qty - sec_backlog) if strategy == "echelon" else (main_inv + main_pipe_qty - main_backlog_to_sec)
         main_order_given = 0
+        main_trigger_action = False
         
-        if pos <= main_rop:
-            main_order_given = main_q; main_arrivals[t + int(main_lt)] += main_q; main_pipe_qty += main_q
-            main_pipe_events[t + int(main_lt)].append({'qty': main_q, 'order_t': t, 'main_arr_t': t + int(main_lt)})
+        if main_policy == "continuous":
+            if pos <= main_rop:
+                main_trigger_action = True
+                main_order_qty_eval = main_q
+        elif main_policy == "periodic":
+            if t % main_r == 0:
+                if pos < main_s:
+                    main_trigger_action = True
+                    main_order_qty_eval = main_s - pos
+        
+        if main_trigger_action:
+            main_order_given = main_order_qty_eval
+            main_arrivals[t + int(main_lt)] += main_order_qty_eval
+            main_pipe_qty += main_order_qty_eval
+            main_pipe_events[t + int(main_lt)].append({'qty': main_order_qty_eval, 'order_t': t, 'main_arr_t': t + int(main_lt)})
             
         s_recv[t] = s_arr; s_avail[t] = s_opening[t] + s_arr; s_sales[t] = sales; s_short[t] = shortage
         s_back[t] = sec_backlog; s_close[t] = sec_inv; s_order[t] = sec_order_given; s_sup_short[t] = shortage_from_supplier; s_pipe[t] = sec_pipe_qty
@@ -295,8 +339,7 @@ def simulate_two_stage_detailed(demands, sec_rop, sec_q, sec_lt, main_rop, main_
     
     vol_fr = total_sales / total_dem if total_dem > 0 else 1.0
     csl = 1 - (stockout_days / (total_days - warmup))
-    return df_sec, df_main, vol_fr, csl, main_delay_days, pd.DataFrame(age_records), pd.DataFrame(daily_inventory_age)
-
+    return df_sec, df_main, vol_fr, csl, main_delay_days, pd.DataFrame(age_records), pd.DataFrame(daily_inventory_age), total_sales, total_dem, stockout_days
 # --- Plotly Helper Functions ---
 def render_interactive_chart(df, y_cols):
     fig = go.Figure()
@@ -425,7 +468,7 @@ if st.button("🔄 Generate New Demand Profile"):
 st.caption("Note: All scenarios run against the exact same pre-generated daily demand to ensure fair comparisons.")
 st.markdown("---")
 
-tab1, tab2, tab3 = st.tabs(["🏢 Scenario 1: Single Central", "🏬 Scenario 2: Two-Stage (Local ROP)", "🌍 Scenario 3: Multi-Echelon"])
+tab1, tab2, tab3, tab4 = st.tabs(["🏢 S1: Single Central", "🏬 S2: Two-Stage (Local ROP)", "🌍 S3: Multi-Echelon", "🔄 S4: Policy Diagnostics (s,Q vs R,S)"])
 
 # ==========================================
 # TAB 1: SINGLE WAREHOUSE
@@ -709,6 +752,137 @@ with tab3:
     with col_dl4:
         st.write("Download this table as an Excel file:")
         st.download_button(label="📥 Download Excel", data=convert_df_to_excel(df_tab3_daily), file_name="multi_echelon_daily_inventory.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_tab3")
+# ==========================================
+# TAB 4: POLICY DIAGNOSTICS (CONTINUOUS VS PERIODIC)
+# ==========================================
+with tab4:
+    st.markdown("#### 🏪 Secondary (Front-line) Policy")
+    col4_1, col4_2 = st.columns([1, 3])
+    s4_sec_policy = col4_1.radio("Secondary Policy", ["Continuous (s, Q)", "Periodic (R, S)"], key="s4_sec_pol")
+    
+    with col4_2:
+        c6a, c6b, c6c = st.columns(3)
+        s4_sec_lt = c6a.number_input("Transit LT", min_value=0.0, value=3.0, step=1.0, key="s4_sec_lt")
+        s4_sec_sl = c6b.slider("Sec Target Fill Rate", 0.50, 0.999, 0.95, key="s4_sec_sl")
+        s4_sec_cost = c6c.number_input("Unit Cost (₹)", min_value=0.01, value=60.0, step=5.0, key="s4_sec_cost")
+        
+        c6d, c6e, c6f = st.columns(3)
+        if s4_sec_policy == "Continuous (s, Q)":
+            s4_sec_q = c6d.number_input("Order Qty (Q)", min_value=1, value=300, step=50, key="s4_sec_q")
+            rec_s4_sec_rop, _ = get_recommendations(global_dem, global_std, s4_sec_lt, s4_sec_sl)
+            s4_sec_actual_rop = c6e.number_input("Actual ROP (s)", min_value=0, value=int(rec_s4_sec_rop), step=10, key="s4_sec_rop")
+            c6e.caption(f"💡 Suggested ROP: **{rec_s4_sec_rop:,.0f}**")
+            s4_sec_r, s4_sec_s = 1, 0 # Defaults for function
+        else:
+            s4_sec_r = c6d.number_input("Review Period (R)", min_value=1, value=7, step=1, key="s4_sec_r")
+            rec_s4_sec_s, _ = get_periodic_recommendations(global_dem, global_std, s4_sec_lt, s4_sec_r, s4_sec_sl)
+            s4_sec_s = c6e.number_input("Target Level (S)", min_value=0, value=int(rec_s4_sec_s), step=10, key="s4_sec_s_tgt")
+            c6e.caption(f"💡 Suggested Target: **{rec_s4_sec_s:,.0f}**")
+            s4_sec_q, s4_sec_actual_rop = 0, 0 # Defaults for function
+            
+        s4_sec_allow_partial = c6f.checkbox("Allow Partial", value=True, key="s4_sec_partial")
+        s4_sec_track_backlogs = c6f.checkbox("Track Backlogs", value=True, key="s4_sec_backlog")
+
+    st.markdown("#### 🏭 Main (Echelon Evaluator) Policy")
+    col4_3, col4_4 = st.columns([1, 3])
+    s4_main_policy = col4_3.radio("Main Policy", ["Continuous (s, Q)", "Periodic (R, S)"], key="s4_main_pol")
+    
+    with col4_4:
+        c7a, c7b, c7c = st.columns(3)
+        s4_main_demand = c7a.number_input("Agg Demand", min_value=0.0, value=global_dem, step=10.0, key="s4_main_d")
+        s4_main_lt = c7b.number_input("Supplier LT", min_value=0.0, value=10.0, step=1.0, key="s4_main_lt")
+        s4_main_sl = c7c.slider("Main Target Fill Rate", 0.50, 0.999, 0.98, key="s4_main_sl")
+        
+        c7d, c7e, c7f = st.columns(3)
+        s4_main_cost = c7d.number_input("Unit Cost (₹)", min_value=0.01, value=50.0, step=5.0, key="s4_main_cost")
+        
+        if s4_main_policy == "Continuous (s, Q)":
+            s4_main_q = c7e.number_input("Main Order Qty (Q)", min_value=1, value=800, step=50, key="s4_main_q")
+            _, main_base_ss = get_recommendations(s4_main_demand, global_std, s4_main_lt, s4_main_sl)
+            # Standard echelon logic for continuous
+            rec_echelon_rop = rec_s4_sec_rop + (s4_main_demand * s4_main_lt) + main_base_ss if s4_sec_policy == "Continuous (s, Q)" else rec_s4_sec_s + (s4_main_demand * s4_main_lt) + main_base_ss
+            s4_echelon_actual_rop = c7f.number_input("Echelon Actual ROP", min_value=0, value=int(rec_echelon_rop), step=10, key="s4_ech_act")
+            c7f.caption(f"💡 Suggested: **{rec_echelon_rop:,.0f}**")
+            s4_main_r, s4_main_s = 1, 0
+        else:
+            s4_main_r = c7e.number_input("Main Review Period (R)", min_value=1, value=14, step=1, key="s4_main_r")
+            rec_main_s, _ = get_periodic_recommendations(s4_main_demand, global_std, s4_main_lt, s4_main_r, s4_main_sl)
+            # Echelon Target = Secondary Trigger logic + Main Target Level
+            sec_trigger = rec_s4_sec_rop if s4_sec_policy == "Continuous (s, Q)" else rec_s4_sec_s
+            rec_echelon_s = sec_trigger + rec_main_s
+            s4_main_s = c7f.number_input("Echelon Target Level (S)", min_value=0, value=int(rec_echelon_s), step=10, key="s4_main_s_tgt")
+            c7f.caption(f"💡 Suggested: **{rec_echelon_s:,.0f}**")
+            s4_main_q, s4_echelon_actual_rop = 0, 0
+            
+        c7g, c7h = st.columns(2)
+        s4_main_allow_partial = c7g.checkbox("Allow Partial", value=True, key="s4_main_partial")
+        s4_main_track_backlogs = c7h.checkbox("Track Backlogs", value=True, key="s4_main_backlog")
+
+    st.markdown("---")
+    
+    # Run Simulation
+    sec_pol_str = "continuous" if s4_sec_policy == "Continuous (s, Q)" else "periodic"
+    main_pol_str = "continuous" if s4_main_policy == "Continuous (s, Q)" else "periodic"
+    
+    df_sec_s4, df_main_s4, vol_fr_4, csl_4, delay_4, age_s4, d_age_s4, t_sales_4, t_dem_4, stockout_d_4 = simulate_two_stage_detailed(
+        st.session_state.demand_array, s4_sec_actual_rop, s4_sec_q, s4_sec_lt, s4_echelon_actual_rop, s4_main_q, s4_main_lt, 
+        warmup_days, s4_sec_allow_partial, s4_sec_track_backlogs, s4_main_allow_partial, s4_main_track_backlogs, 
+        "echelon", sec_pol_str, s4_sec_r, s4_sec_s, main_pol_str, s4_main_r, s4_main_s
+    )
+    
+    avg_sec_oh_4 = df_sec_s4['Closing Balance'].mean()
+    avg_sec_pipe_4 = df_sec_s4['Pipeline Inventory'].mean()
+    avg_main_oh_4 = df_main_s4['Closing Balance'].mean()
+    avg_main_pipe_4 = df_main_s4['Pipeline Inventory'].mean()
+    
+    total_sys_val_4 = (avg_sec_oh_4 * s4_sec_cost) + (avg_sec_pipe_4 * s4_sec_cost) + (avg_main_oh_4 * s4_main_cost) + (avg_main_pipe_4 * s4_main_cost)
+    s4_daily_sys_val = (df_sec_s4['Closing Balance'] + df_sec_s4['Pipeline Inventory']) * s4_sec_cost + (df_main_s4['Closing Balance'] + df_main_s4['Pipeline Inventory']) * s4_main_cost
+    peak_sys_val_4 = s4_daily_sys_val.max()
+
+    tm1, tm2, tm3, tm4, tm5, tm6 = st.columns(6)
+    tm1.metric("Simulated Avg WC", f"₹{total_sys_val_4:,.2f}")
+    tm2.metric("Peak Working Capital", f"₹{peak_sys_val_4:,.2f}")
+    # Absolute values displayed below percentage
+    tm3.metric("Volume Fill Rate", f"{vol_fr_4*100:.1f}%", f"{t_sales_4:,.0f} / {t_dem_4:,.0f} Phys.", delta_color="off")
+    tm4.metric("Service Level", f"{csl_4*100:.1f}%", f"{sim_days - stockout_d_4:,.0f} / {sim_days:,.0f} Days", delta_color="off")
+    tm5.metric("Main Delays", f"{delay_4} Days")
+    tm6.metric("Total Sales", f"{t_sales_4:,.0f}")
+
+    # Ensure white backgrounds & Blue visuals for minimal aesthetics
+    plot_df4 = pd.DataFrame({'Day': df_sec_s4['Day'], 'Sec On-Hand': df_sec_s4['Closing Balance'], 'Sec Pipeline': df_sec_s4['Pipeline Inventory'], 'Sec Backlogged': df_sec_s4['Backlogs'], 'Main On-Hand': df_main_s4['Closing Balance'], 'Main Pipeline': df_main_s4['Pipeline Inventory']})
+    fig4 = go.Figure()
+    color_map = {'Sec On-Hand': '#1f77b4', 'Sec Pipeline': '#aec7e8', 'Main On-Hand': '#0066CC', 'Main Pipeline': '#82CAFA', 'Sec Backlogged': '#d62728'}
+    for col in ['Sec On-Hand', 'Sec Pipeline', 'Sec Backlogged', 'Main On-Hand', 'Main Pipeline']:
+        is_pipeline = 'Pipeline' in col; is_backlog = 'Backlog' in col
+        fig4.add_trace(go.Scatter(x=plot_df4['Day'], y=plot_df4[col], mode='lines', name=col, line=dict(color=color_map.get(col, '#333333'), width=2 if not is_pipeline else 3), line_shape='hv' if is_pipeline or is_backlog else 'linear', opacity=0.8 if is_pipeline else 1.0))
+    fig4.update_layout(plot_bgcolor='white', paper_bgcolor='white', xaxis_title="Day", yaxis_title="Units", hovermode="x unified", margin=dict(l=0, r=0, t=30, b=80), legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5))
+    st.plotly_chart(fig4, use_container_width=True)
+
+    st.markdown("### 📈 Working Capital Analysis")
+    show_pipe_4 = st.checkbox("Include Pipeline Inventory in WC Calculation", value=True, key="wc_t4")
+    render_working_capital_chart_multi(df_sec_s4, df_main_s4, s4_sec_cost, s4_main_cost, s4_sec_cost, s4_main_cost, show_pipe_4)
+    
+    st.markdown("### 📊 Daily Age Profile & Aging Buckets")
+    tab4_sub1, tab4_sub2 = st.tabs(["Longitudinal Aging Buckets", "Single Day Thermal Profile"])
+    with tab4_sub1:
+        bucket_view_4 = st.selectbox("Select View", ["Overall System", "Main On-Hand", "Sec On-Hand"], key="b_s4")
+        render_aging_buckets_chart(d_age_s4, bucket_view_4)
+    with tab4_sub2:
+        selected_day_4 = st.slider("Select Day to View Age Distribution", min_value=1, max_value=int(sim_days), value=int(sim_days), key="day_s4")
+        render_daily_age_profile(d_age_s4, selected_day_4)
+
+    st.markdown("### ⏳ Age of Inventory at Sale (FIFO Analytics)")
+    if not age_s4.empty:
+        age_s4['Total Time'] = age_s4['Main Pipeline Time'] + age_s4['Main Warehouse Time'] + age_s4['Sec Pipeline Time'] + age_s4['Sec Warehouse Time']
+        a1, a2, a3, a4, a5 = st.columns(5)
+        a1.metric("Avg Main Pipe", f"{(age_s4['Main Pipeline Time'] * age_s4['Qty']).sum() / age_s4['Qty'].sum():.1f} d")
+        a2.metric("Avg Main WH", f"{(age_s4['Main Warehouse Time'] * age_s4['Qty']).sum() / age_s4['Qty'].sum():.1f} d")
+        a3.metric("Avg Sec Pipe", f"{(age_s4['Sec Pipeline Time'] * age_s4['Qty']).sum() / age_s4['Qty'].sum():.1f} d")
+        a4.metric("Avg Sec WH", f"{(age_s4['Sec Warehouse Time'] * age_s4['Qty']).sum() / age_s4['Qty'].sum():.1f} d")
+        a5.metric("Total Age at Sale", f"{(age_s4['Total Time'] * age_s4['Qty']).sum() / age_s4['Qty'].sum():.1f} d")
+        render_age_histogram(age_s4, ['Main Warehouse Time', 'Sec Warehouse Time', 'Total Time'])
+
+
 
 # ==========================================
 # MASTER COMPARISON TABLE
